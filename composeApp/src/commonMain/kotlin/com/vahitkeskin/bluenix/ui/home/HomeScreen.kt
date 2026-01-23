@@ -4,6 +4,8 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -35,10 +37,11 @@ fun HomeScreen(
     onNavigateToFiles: () -> Unit
 ) {
 
-    // 1. ViewModel'i çağır
     val viewModel = koinViewModel<HomeViewModel>()
-    // 2. State'i dinle
     val locationData by viewModel.locationState.collectAsState()
+
+    // Gerçek cihaz listesini dinle
+    val nearbyDevices by viewModel.scannedDevices.collectAsState()
 
     Scaffold(
         bottomBar = { BlueNixBottomBar(onNavigateToChat, onNavigateToFiles) },
@@ -123,18 +126,26 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(40.dp))
 
-            // Bulunan Cihazlar Listesi (Mock)
+            // DİNAMİK LİSTE BAŞLIĞI
             Text(
-                "NEARBY DEVICES (3)",
+                "NEARBY DEVICES (${nearbyDevices.size})",
                 style = MaterialTheme.typography.labelMedium,
                 color = Color.Gray,
                 modifier = Modifier.align(Alignment.Start)
             )
             Spacer(modifier = Modifier.height(10.dp))
 
-            DeviceItem("Vahit's MacBook", "12m • Active")
-            DeviceItem("iPhone 15 Pro", "4m • Walking")
-            DeviceItem("Galaxy S24", "Unknown • Static")
+            // LAZY COLUMN KULLAN (Çok cihaz olabilir)
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().weight(1f) // Kalan alanı kaplasın
+            ) {
+                items(nearbyDevices) { device ->
+                    DeviceItem(
+                        name = device.name ?: "Unknown [${device.address.takeLast(4)}]",
+                        status = device.getEstimatedDistance() // Hesaplanan mesafe
+                    )
+                }
+            }
         }
     }
 }
