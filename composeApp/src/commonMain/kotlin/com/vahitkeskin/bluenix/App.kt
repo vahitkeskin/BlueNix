@@ -17,6 +17,7 @@ import com.vahitkeskin.bluenix.ui.theme.BlueNixBlack
 import com.vahitkeskin.bluenix.ui.theme.BlueNixDarkSurface
 import com.vahitkeskin.bluenix.ui.theme.NeonBlue
 import com.vahitkeskin.bluenix.ui.theme.TextWhite
+import com.vahitkeskin.bluenix.utils.safeStatusBarPadding
 
 @Composable
 fun App() {
@@ -36,16 +37,18 @@ fun App() {
         ) {
             val navController = rememberNavController()
 
+            // DEĞİŞİKLİK BURADA:
+            // NavHost'a .safeStatusBarPadding() ekledik.
+            // Artık tüm sayfalar Status Bar'ın altından başlayacak.
             NavHost(
                 navController = navController,
-                startDestination = "home"
+                startDestination = "home",
+                modifier = Modifier.safeStatusBarPadding()
             ) {
                 composable("home") {
                     HomeScreen(
-                        // Bottom Bar -> Chat History'ye git
                         onNavigateToChat = { navController.navigate("chat_history") },
                         onNavigateToFiles = { navController.navigate("files") },
-                        // Cihaz Listesi -> Direkt Chat'e git
                         onDeviceClick = { device ->
                             val safeName = device.name ?: "Unknown"
                             val safeAddress = device.address
@@ -54,17 +57,14 @@ fun App() {
                     )
                 }
 
-                // 2. Chat History Ekranı (YENİ)
                 composable("chat_history") {
                     ChatHistoryScreen(
                         onChatClick = { name, address ->
-                            // Listeden birine tıklayınca detay sayfasına git
                             navController.navigate("chat/$name/$address")
                         }
                     )
                 }
 
-                // 3. Chat Detay Ekranı (Mevcut)
                 composable("chat/{name}/{address}") { backStackEntry ->
                     val name = backStackEntry.arguments?.getString("name") ?: "Unknown"
                     val address = backStackEntry.arguments?.getString("address") ?: ""
@@ -76,7 +76,6 @@ fun App() {
                     )
                 }
 
-                // --- FILES ROUTE ---
                 composable("files") {
                     PlaceholderScreen("Dosya Transferi", navController)
                 }
