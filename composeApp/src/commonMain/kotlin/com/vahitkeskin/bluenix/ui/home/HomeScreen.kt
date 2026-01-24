@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.vahitkeskin.bluenix.core.model.BluetoothDeviceDomain // BU IMPORT EKLENDİ
 import com.vahitkeskin.bluenix.ui.theme.HologramBlue
 import com.vahitkeskin.bluenix.ui.theme.NeonBlue
 import org.koin.compose.viewmodel.koinViewModel
@@ -34,7 +35,8 @@ import org.koin.compose.viewmodel.koinViewModel
 @Composable
 fun HomeScreen(
     onNavigateToChat: () -> Unit,
-    onNavigateToFiles: () -> Unit
+    onNavigateToFiles: () -> Unit,
+    onDeviceClick: (BluetoothDeviceDomain) -> Unit // YENİ PARAMETRE
 ) {
 
     val viewModel = koinViewModel<HomeViewModel>()
@@ -45,7 +47,7 @@ fun HomeScreen(
 
     Scaffold(
         bottomBar = { BlueNixBottomBar(onNavigateToChat, onNavigateToFiles) },
-        containerColor = MaterialTheme.colorScheme.background // Arka plan rengini garantiye aldık
+        containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
         Column(
             modifier = Modifier
@@ -103,8 +105,6 @@ fun HomeScreen(
                             fontWeight = FontWeight.Bold
                         )
 
-                        println("This is very good: ${locationData?.latitude}, ${locationData?.longitude}")
-
                         // Hassasiyet Göstergesi
                         val accuracy = locationData!!.accuracy
                         val accuracyColor = if (accuracy < 5) Color.Green else if (accuracy < 10) Color.Yellow else Color.Red
@@ -116,7 +116,7 @@ fun HomeScreen(
                         )
                     } else {
                         Text(
-                            "Acquiring Satellites...", // Uydu aranıyor...
+                            "Acquiring Satellites...",
                             color = NeonBlue.copy(alpha = 0.7f),
                             style = MaterialTheme.typography.bodySmall
                         )
@@ -135,14 +135,15 @@ fun HomeScreen(
             )
             Spacer(modifier = Modifier.height(10.dp))
 
-            // LAZY COLUMN KULLAN (Çok cihaz olabilir)
+            // LAZY COLUMN
             LazyColumn(
-                modifier = Modifier.fillMaxWidth().weight(1f) // Kalan alanı kaplasın
+                modifier = Modifier.fillMaxWidth().weight(1f)
             ) {
                 items(nearbyDevices) { device ->
                     DeviceItem(
                         name = device.name ?: "Unknown [${device.address.takeLast(4)}]",
-                        status = device.getEstimatedDistance() // Hesaplanan mesafe
+                        status = device.getEstimatedDistance(),
+                        onClick = { onDeviceClick(device) } // TIKLAMA BURADA BAĞLANDI
                     )
                 }
             }
@@ -162,24 +163,10 @@ fun RadarAnimation() {
     )
 
     Canvas(modifier = Modifier.fillMaxSize()) {
-        // Sabit Halkalar
-        drawCircle(
-            color = HologramBlue,
-            radius = size.minDimension / 2,
-            style = Stroke(width = 2f)
-        )
-        drawCircle(
-            color = HologramBlue.copy(alpha = 0.5f),
-            radius = size.minDimension / 3,
-            style = Stroke(width = 2f)
-        )
-        drawCircle(
-            color = HologramBlue.copy(alpha = 0.2f),
-            radius = size.minDimension / 6,
-            style = Stroke(width = 2f)
-        )
+        drawCircle(color = HologramBlue, radius = size.minDimension / 2, style = Stroke(width = 2f))
+        drawCircle(color = HologramBlue.copy(alpha = 0.5f), radius = size.minDimension / 3, style = Stroke(width = 2f))
+        drawCircle(color = HologramBlue.copy(alpha = 0.2f), radius = size.minDimension / 6, style = Stroke(width = 2f))
 
-        // Dönen Tarayıcı
         rotate(rotation) {
             drawCircle(
                 brush = Brush.sweepGradient(
@@ -200,11 +187,13 @@ fun RadarAnimation() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DeviceItem(name: String, status: String) {
-    // DÜZELTME BURADA YAPILDI:
-    // Modifier.clickable yerine Card'ın onClick parametresi kullanılıyor.
+fun DeviceItem(
+    name: String,
+    status: String,
+    onClick: () -> Unit // YENİ CALLBACK
+) {
     Card(
-        onClick = { /* Tıklama aksiyonu */ },
+        onClick = onClick, // CARD TIKLAMASI BURADA
         colors = CardDefaults.cardColors(containerColor = Color(0xFF111B2E)),
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
     ) {
@@ -261,7 +250,7 @@ fun BlueNixBottomBar(onChat: () -> Unit, onFiles: () -> Unit) {
             icon = { Icon(Icons.Default.BluetoothSearching, contentDescription = null) },
             label = { Text("Radar") },
             selected = true,
-            onClick = { /* Zaten buradayız */ },
+            onClick = { },
             colors = NavigationBarItemDefaults.colors(
                 selectedIconColor = NeonBlue,
                 selectedTextColor = NeonBlue,
