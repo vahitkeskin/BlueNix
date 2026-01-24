@@ -6,9 +6,10 @@ import androidx.room.PrimaryKey
 @Entity(tableName = "messages")
 data class MessageEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val deviceAddress: String, // Hangi cihazla konuşuyoruz?
-    val deviceName: String,    // Cihazın o anki adı
+    val deviceAddress: String,
+    val deviceName: String,
     val text: String,
     val isFromMe: Boolean,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long,
+    val isRead: Boolean = true // Varsayılan: Okundu (Kendi mesajlarımız için)
 )

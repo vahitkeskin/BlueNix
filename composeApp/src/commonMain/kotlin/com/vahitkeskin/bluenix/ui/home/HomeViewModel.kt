@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vahitkeskin.bluenix.core.model.BluetoothDeviceDomain
 import com.vahitkeskin.bluenix.core.model.LocationData
+import com.vahitkeskin.bluenix.core.repository.ChatRepository
 import com.vahitkeskin.bluenix.core.service.BluetoothService
 import com.vahitkeskin.bluenix.core.service.LocationService
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,7 +16,8 @@ import kotlinx.coroutines.launch
 
 class HomeViewModel(
     private val locationService: LocationService,
-    private val bluetoothService: BluetoothService
+    private val bluetoothService: BluetoothService,
+    private val chatRepository: ChatRepository
 ) : ViewModel() {
 
     // Konum State
@@ -29,6 +31,10 @@ class HomeViewModel(
     // Bluetooth Durumu
     val isBluetoothOn: StateFlow<Boolean> = bluetoothService.isBluetoothEnabled()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    // YENİ: Okunmamış mesaj sayısı
+    val unreadMessageCount: StateFlow<Int> = chatRepository.getUnreadCount()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
     init {
         startTracking()
