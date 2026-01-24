@@ -2,11 +2,16 @@ package com.vahitkeskin.bluenix.core.service
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
 import android.util.Log
 import com.vahitkeskin.bluenix.core.model.BluetoothDeviceDomain
 import kotlinx.coroutines.channels.awaitClose
@@ -17,114 +22,178 @@ class AndroidBluetoothService(
     private val context: Context
 ) : BluetoothService {
 
-    private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+    private val bluetoothManager =
+        context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private val adapter: BluetoothAdapter? = bluetoothManager.adapter
 
-    @SuppressLint("MissingPermission") // İzinler MainActivity'de kontrol ediliyor
+    @SuppressLint("MissingPermission")
     override fun scanDevices(): Flow<List<BluetoothDeviceDomain>> = callbackFlow {
-        // 1. ADIM: Donanım Kontrolü
-        if (adapter == null) {
-            Log.e("BlueNixBT", "HATA: Cihazda Bluetooth donanımı bulunamadı.")
-            close() // Flow'u kapat
-            return@callbackFlow
-        }
-
-        if (!adapter.isEnabled) {
-            Log.w("BlueNixBT", "UYARI: Bluetooth kapalı. Kullanıcının açması bekleniyor.")
-            // Burada kullanıcıya bir uyarı gösterilebilir, şimdilik boş liste dönüyoruz.
+        // 1. Donanım Kontrolü
+        if (adapter == null || !adapter.isEnabled) {
+            Log.e("BlueNixBT", "Bluetooth kapalı veya yok.")
             trySend(emptyList())
-            // close() yapmıyoruz, belki kullanıcı sonradan açar.
-        }
-
-        val scanner = adapter.bluetoothLeScanner
-        if (scanner == null) {
-            Log.e("BlueNixBT", "HATA: Bluetooth Scanner başlatılamadı (Bluetooth kapalı olabilir).")
-            close()
+            // Kapatmıyoruz, kullanıcı açarsa diye bekliyoruz ama şimdilik boş dönüyoruz.
             return@callbackFlow
         }
 
-        // Taranan cihazları tutacağımız geçici hafıza (Tekrar edenleri engellemek için Map)
+        // Taranan cihazları tutacak ortak havuz
         val foundDevices = mutableMapOf<String, BluetoothDeviceDomain>()
 
-        // 2. ADIM: Tarama Ayarları (Düşük Gecikme = Hızlı Tespit)
-        val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-            .build()
-
-        // 3. ADIM: Callback Tanımı
-        val callback = object : ScanCallback() {
+        // ----------------------------------------------------------------
+        // YÖNTEM A: LE (Low Energy) Taraması (Mevcut kodunuz)
+        // ----------------------------------------------------------------
+        val leScanner = adapter.bluetoothLeScanner
+        val leCallback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
-                super.onScanResult(callbackType, result)
-
                 val device = result.device
-                val address = device.address
-
-                // İsim yoksa "No Name" yaz ama GİZLEME
-                val displayName = if (device.name.isNullOrBlank()) {
-                    "No Name [$address]"
-                } else {
-                    device.name
+                addDeviceToList(device, result.rssi, foundDevices) { sortedList ->
+                    trySend(sortedList)
                 }
-
-                // Log'a da bakalım
-                //Log.d("BlueNixBT", "Eklendi: $displayName - RSSI: ${result.rssi}")
-
-                foundDevices[address] = BluetoothDeviceDomain(
-                    name = displayName,
-                    address = address,
-                    rssi = result.rssi,
-                    timestamp = System.currentTimeMillis()
-                )
-
-                trySend(foundDevices.values.toList().sortedByDescending { it.rssi })
             }
 
             override fun onBatchScanResults(results: MutableList<ScanResult>?) {
-                super.onBatchScanResults(results)
                 results?.forEach { result ->
-                    // Toplu gelen sonuçları işle (Nadiren tetiklenir ama iyidir)
-                    val device = result.device
-                    foundDevices[device.address] = BluetoothDeviceDomain(
-                        name = device.name ?: "Unknown Device",
-                        address = device.address,
-                        rssi = result.rssi,
-                        timestamp = System.currentTimeMillis()
-                    )
+                    addDeviceToList(result.device, result.rssi, foundDevices) { sortedList ->
+                        trySend(sortedList)
+                    }
                 }
-                trySend(foundDevices.values.toList().sortedByDescending { it.rssi })
             }
 
             override fun onScanFailed(errorCode: Int) {
-                super.onScanFailed(errorCode)
-                val errorMessage = when(errorCode) {
-                    SCAN_FAILED_ALREADY_STARTED -> "Tarama zaten çalışıyor."
-                    SCAN_FAILED_APPLICATION_REGISTRATION_FAILED -> "Uygulama kaydedilemedi (Restart gerekebilir)."
-                    SCAN_FAILED_FEATURE_UNSUPPORTED -> "Bu cihaz BLE desteklemiyor."
-                    SCAN_FAILED_INTERNAL_ERROR -> "Dahili Bluetooth hatası."
-                    else -> "Bilinmeyen Hata: $errorCode"
+                Log.e("BlueNixBT", "LE Scan Failed: $errorCode")
+            }
+        }
+
+        // LE Taramasını Başlat
+        if (leScanner != null) {
+            val settings = ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .build()
+            leScanner.startScan(null, settings, leCallback)
+            Log.i("BlueNixBT", "BLE Taraması Başlatıldı.")
+        }
+
+        // ----------------------------------------------------------------
+        // YÖNTEM B: Klasik Bluetooth Taraması (Discovery)
+        // ----------------------------------------------------------------
+        val discoveryReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                when (intent.action) {
+                    BluetoothDevice.ACTION_FOUND -> {
+                        // Yeni bir klasik cihaz bulundu
+                        val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            intent.getParcelableExtra(
+                                BluetoothDevice.EXTRA_DEVICE,
+                                BluetoothDevice::class.java
+                            )
+                        } else {
+                            @Suppress("DEPRECATION")
+                            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                        }
+
+                        val rssi = intent.getShortExtra(BluetoothDevice.EXTRA_RSSI, Short.MIN_VALUE)
+                            .toInt()
+
+                        device?.let {
+                            addDeviceToList(it, rssi, foundDevices) { sortedList ->
+                                trySend(sortedList)
+                            }
+                        }
+                    }
                 }
-                Log.e("BlueNixBT", "Tarama Başarısız: $errorMessage")
             }
         }
 
-        // 4. ADIM: Taramayı Başlat
-        try {
-            Log.i("BlueNixBT", "Bluetooth taraması başlatılıyor...")
-            scanner.startScan(null, settings, callback)
-        } catch (e: Exception) {
-            Log.e("BlueNixBT", "startScan hatası: ${e.message}")
-            close(e) // Hata ile kapat
+        // Receiver'ı Kaydet
+        val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
+        context.registerReceiver(discoveryReceiver, filter)
+
+        // Klasik Taramayı Başlat (12 saniye sürer, sonra sistem durdurur, döngü gerekebilir)
+        if (adapter.isDiscovering) {
+            adapter.cancelDiscovery()
+        }
+        adapter.startDiscovery()
+        Log.i("BlueNixBT", "Klasik Discovery Başlatıldı.")
+
+        // ----------------------------------------------------------------
+        // YÖNTEM C: Zaten Eşleşmiş Cihazları Getir (Hız Kazandırır)
+        // ----------------------------------------------------------------
+        adapter.bondedDevices?.forEach { device ->
+            // Eşleşmiş cihazların RSSI değeri olmaz, varsayılan bir değer veriyoruz (-50 gibi güçlü varsayalım)
+            addDeviceToList(device, -50, foundDevices) { sortedList ->
+                trySend(sortedList)
+            }
         }
 
-        // 5. ADIM: Temizlik (Memory Leak Önleme)
+        // ----------------------------------------------------------------
+        // TEMİZLİK (Flow Kapanınca)
+        // ----------------------------------------------------------------
         awaitClose {
-            Log.i("BlueNixBT", "Bluetooth taraması durduruluyor...")
-            // Scanner null olabilir (Bluetooth kapatıldıysa), kontrol et
-            try {
-                scanner?.stopScan(callback)
-            } catch (e: Exception) {
-                Log.e("BlueNixBT", "stopScan hatası: ${e.message}")
+            Log.i("BlueNixBT", "Tüm taramalar durduruluyor...")
+            leScanner?.stopScan(leCallback)
+
+            if (adapter.isDiscovering) {
+                adapter.cancelDiscovery()
             }
+
+            try {
+                context.unregisterReceiver(discoveryReceiver)
+            } catch (e: IllegalArgumentException) {
+                // Zaten unregister edilmişse hata vermesin
+            }
+        }
+    }
+
+    // Listeye ekleme ve sıralama yapan yardımcı fonksiyon
+    @SuppressLint("MissingPermission")
+    private fun addDeviceToList(
+        device: BluetoothDevice,
+        rssi: Int,
+        map: MutableMap<String, BluetoothDeviceDomain>,
+        onUpdate: (List<BluetoothDeviceDomain>) -> Unit
+    ) {
+        val address = device.address ?: return
+
+        // İsim yoksa bile adresi göster
+        val name = device.name ?: "Bilinmeyen Cihaz"
+        val displayName = if (name.isBlank()) "No Name [$address]" else name
+
+        // Logcat'te görmek için (İsteğe bağlı açabilirsin)
+        // Log.d("BlueNixBT", "Bulundu: $displayName ($rssi)")
+
+        map[address] = BluetoothDeviceDomain(
+            name = displayName,
+            address = address,
+            rssi = rssi,
+            timestamp = System.currentTimeMillis()
+        )
+
+        // RSSI gücüne göre sıralayıp gönder (En yakın en üstte)
+        val sortedList = map.values.toList().sortedByDescending { it.rssi }
+        onUpdate(sortedList)
+    }
+
+    override fun isBluetoothEnabled(): Flow<Boolean> = callbackFlow {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
+                    val state =
+                        intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+                    trySend(state == BluetoothAdapter.STATE_ON)
+                }
+            }
+        }
+
+        // İlk durumu gönder
+        val adapter =
+            (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        trySend(adapter?.isEnabled == true)
+
+        // Değişiklikleri dinle
+        context.registerReceiver(receiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
+
+        awaitClose {
+            context.unregisterReceiver(receiver)
         }
     }
 }
