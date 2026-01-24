@@ -33,7 +33,6 @@ class MainActivity : ComponentActivity() {
         // Hem Konum hem Bluetooth izni varsa servisi başlat
         if ((fineLocationGranted || coarseLocationGranted) && bluetoothScanGranted) {
             startLocationService()
-            // Bluetooth servisi otomatik çalışacak (ViewModel init bloğunda)
         } else {
             println("❌ Gerekli izinler (Bluetooth veya Konum) verilmedi.")
         }
@@ -43,8 +42,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
-        // ⚠️ DİKKAT: Burada 'startLocationService()' ASLA doğrudan çağrılmamalıdır!
-        // Önce izinleri kontrol et, varsa başlat, yoksa iste.
+        // İzinleri kontrol et ve servisi başlat
         checkPermissionsAndStartService()
 
         setContent {
@@ -55,14 +53,13 @@ class MainActivity : ComponentActivity() {
     private fun checkPermissionsAndStartService() {
         val permissionsToRequest = mutableListOf<String>()
 
-        // 1. Konum İzni (Eski ve Yeni cihazlar için)
+        // 1. Konum İzni (Tüm cihazlar için)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             permissionsToRequest.add(Manifest.permission.ACCESS_FINE_LOCATION)
             permissionsToRequest.add(Manifest.permission.ACCESS_COARSE_LOCATION)
         }
 
-        // 2. Bluetooth İzni (Sadece Android 12+ / API 31+ için)
-        // BU KISIM EKSİK OLDUĞU İÇİN HATA ALIYORSUNUZ
+        // 2. Bluetooth İzinleri (Android 12+ / API 31+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
                 permissionsToRequest.add(Manifest.permission.BLUETOOTH_SCAN)
@@ -70,9 +67,12 @@ class MainActivity : ComponentActivity() {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
                 permissionsToRequest.add(Manifest.permission.BLUETOOTH_CONNECT)
             }
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED) {
+                permissionsToRequest.add(Manifest.permission.BLUETOOTH_ADVERTISE)
+            }
         }
 
-        // 3. Bildirim İzni (Android 13+)
+        // 3. Bildirim İzni (Android 13+ / API 33+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
@@ -80,10 +80,8 @@ class MainActivity : ComponentActivity() {
         }
 
         if (permissionsToRequest.isNotEmpty()) {
-            // İzinleri iste
             permissionLauncher.launch(permissionsToRequest.toTypedArray())
         } else {
-            // İzinler zaten var, başlat
             startLocationService()
         }
     }

@@ -29,7 +29,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.vahitkeskin.bluenix.core.model.BluetoothDeviceDomain
-import com.vahitkeskin.bluenix.ui.home.components.SignalStrengthIndicator
 import com.vahitkeskin.bluenix.ui.theme.HologramBlue
 import com.vahitkeskin.bluenix.ui.theme.NeonBlue
 import org.koin.compose.viewmodel.koinViewModel
@@ -46,24 +45,27 @@ fun HomeScreen(
     val locationData by viewModel.locationState.collectAsState()
     val isBluetoothOn by viewModel.isBluetoothOn.collectAsState()
 
-    // Tüm cihaz listesi
+    // Okunmamış mesaj sayısı (Badge için)
+    val unreadCount by viewModel.unreadMessageCount.collectAsState()
+
     val allDevices by viewModel.scannedDevices.collectAsState()
 
-    // Listeyi Eşleşmiş ve Yeni olarak ayırıyoruz (Android Ayarlar Mantığı)
+    // Listeyi Ayrıştır
     val pairedDevices = remember(allDevices) { allDevices.filter { it.isPaired } }
     val availableDevices = remember(allDevices) { allDevices.filter { !it.isPaired } }
 
     Scaffold(
-        bottomBar = { BlueNixBottomBar(onNavigateToChat, onNavigateToFiles) },
+        bottomBar = { BlueNixBottomBar(onNavigateToChat, onNavigateToFiles, unreadCount) },
         containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .padding(padding)
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Header
+            // --- HEADER ---
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -81,7 +83,7 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(30.dp))
 
-            // RADAR (Visual Core)
+            // --- RADAR ANIMASYONU ---
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier.size(280.dp)
@@ -97,7 +99,6 @@ fun HomeScreen(
                         modifier = Modifier.size(48.dp)
                     )
 
-                    // CANLI VERİ GÖSTERİMİ
                     if (locationData != null) {
                         Text(
                             text = "LAT: ${locationData!!.latitude.toString().take(7)}",
@@ -133,7 +134,7 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // --- LİSTE BÖLÜMÜ ---
+            // --- CİHAZ LİSTESİ ---
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -153,7 +154,7 @@ fun HomeScreen(
                     }
                 }
 
-                // 2. Kullanılabilir Cihazlar
+                // 2. Yeni Cihazlar
                 if (availableDevices.isNotEmpty()) {
                     item {
                         SectionHeader("AVAILABLE DEVICES (${availableDevices.size})")
@@ -165,12 +166,9 @@ fun HomeScreen(
                         )
                     }
                 } else if (isBluetoothOn) {
-                    // Bluetooth açık ama cihaz yoksa veya sadece eşleşmişler varsa ve tarıyorsa
                     item {
                         Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 20.dp),
+                            modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
@@ -186,7 +184,8 @@ fun HomeScreen(
     }
 }
 
-// Şık Başlık Bileşeni
+// --- YARDIMCI BİLEŞENLER ---
+
 @Composable
 fun SectionHeader(title: String) {
     Text(
@@ -197,7 +196,7 @@ fun SectionHeader(title: String) {
         letterSpacing = 1.sp,
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color(0xFF050B14)) // Arka planla aynı renk (yapışkan hissi)
+            .background(Color(0xFF050B14))
             .padding(vertical = 12.dp, horizontal = 4.dp)
     )
 }
@@ -215,27 +214,21 @@ fun DeviceItem(
     Card(
         onClick = onClick,
         colors = CardDefaults.cardColors(containerColor = itemColor),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp)
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
     ) {
         Row(
-            modifier = Modifier
-                .padding(16.dp)
-                .fillMaxWidth(),
+            modifier = Modifier.padding(16.dp).fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // SOL TARA: Cihaz Türü İkonu
             Icon(
                 imageVector = if (isPaired) Icons.Default.BluetoothConnected else Icons.Default.Bluetooth,
                 contentDescription = null,
                 tint = iconColor,
-                modifier = Modifier.size(32.dp) // Biraz büyüttük
+                modifier = Modifier.size(32.dp)
             )
 
             Spacer(modifier = Modifier.width(16.dp))
 
-            // ORTA: İsim ve Adres
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = device.name,
@@ -251,29 +244,15 @@ fun DeviceItem(
                 )
             }
 
-            // SAĞ TARAF: Mesafe ve Sinyal Gücü
-            Column(
-                horizontalAlignment = Alignment.End
-            ) {
-                // Sinyal Barları
+            Column(horizontalAlignment = Alignment.End) {
+                // Sinyal Göstergesi
                 SignalStrengthIndicator(level = device.getSignalLevel())
-
                 Spacer(modifier = Modifier.height(4.dp))
-
-                // Mesafe Bilgisi (Örn: 1.5 m)
                 Text(
                     text = device.getEstimatedDistance(),
                     color = NeonBlue,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold
-                )
-
-                // Debug için RSSI (İstersen kaldırabilirsin)
-                Text(
-                    text = "${device.rssi} dBm",
-                    color = Color.Gray.copy(alpha = 0.5f),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontSize = 8.sp
                 )
             }
         }
@@ -281,42 +260,23 @@ fun DeviceItem(
 }
 
 @Composable
-fun RadarAnimation() {
-    val infiniteTransition = rememberInfiniteTransition()
-    val rotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(3000, easing = LinearEasing)
-        )
-    )
-
-    Canvas(modifier = Modifier.fillMaxSize()) {
-        drawCircle(color = HologramBlue, radius = size.minDimension / 2, style = Stroke(width = 2f))
-        drawCircle(
-            color = HologramBlue.copy(alpha = 0.5f),
-            radius = size.minDimension / 3,
-            style = Stroke(width = 2f)
-        )
-        drawCircle(
-            color = HologramBlue.copy(alpha = 0.2f),
-            radius = size.minDimension / 6,
-            style = Stroke(width = 2f)
-        )
-
-        rotate(rotation) {
-            drawCircle(
-                brush = Brush.sweepGradient(
-                    colors = listOf(Color.Transparent, NeonBlue.copy(alpha = 0.5f)),
-                    center = center
-                ),
-                radius = size.minDimension / 2
-            )
-            drawLine(
-                color = NeonBlue,
-                start = center,
-                end = Offset(center.x + size.minDimension / 2, center.y),
-                strokeWidth = 4f
+fun SignalStrengthIndicator(level: Int, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        for (i in 1..4) {
+            val isActive = i <= level
+            val barHeight = (i * 4).dp
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .height(barHeight)
+                    .background(
+                        color = if (isActive) NeonBlue else Color.Gray.copy(alpha = 0.3f),
+                        shape = RoundedCornerShape(2.dp)
+                    )
             )
         }
     }
@@ -337,9 +297,7 @@ fun StatusChip(isOnline: Boolean) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
-                modifier = Modifier
-                    .size(8.dp)
-                    .clip(CircleShape)
+                modifier = Modifier.size(8.dp).clip(CircleShape)
                     .background(if (isOnline) NeonBlue else Color.Red)
             )
             Spacer(modifier = Modifier.width(8.dp))
@@ -353,16 +311,50 @@ fun StatusChip(isOnline: Boolean) {
 }
 
 @Composable
-fun BlueNixBottomBar(onChat: () -> Unit, onFiles: () -> Unit) {
-    NavigationBar(
-        containerColor = Color(0xFF050B14),
-        contentColor = NeonBlue
-    ) {
+fun RadarAnimation() {
+    val infiniteTransition = rememberInfiniteTransition()
+    val rotation by infiniteTransition.animateFloat(
+        initialValue = 0f, targetValue = 360f,
+        animationSpec = infiniteRepeatable(animation = tween(3000, easing = LinearEasing))
+    )
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        drawCircle(color = HologramBlue, radius = size.minDimension / 2, style = Stroke(width = 2f))
+        drawCircle(
+            color = HologramBlue.copy(alpha = 0.5f),
+            radius = size.minDimension / 3,
+            style = Stroke(width = 2f)
+        )
+        drawCircle(
+            color = HologramBlue.copy(alpha = 0.2f),
+            radius = size.minDimension / 6,
+            style = Stroke(width = 2f)
+        )
+        rotate(rotation) {
+            drawCircle(
+                brush = Brush.sweepGradient(
+                    colors = listOf(
+                        Color.Transparent,
+                        NeonBlue.copy(alpha = 0.5f)
+                    ), center = center
+                ), radius = size.minDimension / 2
+            )
+            drawLine(
+                color = NeonBlue,
+                start = center,
+                end = Offset(center.x + size.minDimension / 2, center.y),
+                strokeWidth = 4f
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun BlueNixBottomBar(onChat: () -> Unit, onFiles: () -> Unit, unreadCount: Int = 0) {
+    NavigationBar(containerColor = Color(0xFF050B14), contentColor = NeonBlue) {
         NavigationBarItem(
-            icon = { Icon(Icons.Default.BluetoothSearching, contentDescription = null) },
-            label = { Text("Radar") },
-            selected = true,
-            onClick = { },
+            icon = { Icon(Icons.Default.BluetoothSearching, null) },
+            label = { Text("Radar") }, selected = true, onClick = { },
             colors = NavigationBarItemDefaults.colors(
                 selectedIconColor = NeonBlue,
                 selectedTextColor = NeonBlue,
@@ -372,30 +364,32 @@ fun BlueNixBottomBar(onChat: () -> Unit, onFiles: () -> Unit) {
             )
         )
         NavigationBarItem(
-            icon = { Icon(Icons.Default.Chat, contentDescription = null) },
-            label = { Text("Chat") },
-            selected = false,
-            onClick = onChat,
+            icon = {
+                if (unreadCount > 0) {
+                    BadgedBox(badge = { Badge { Text(text = unreadCount.toString()) } }) {
+                        Icon(Icons.Default.Chat, null)
+                    }
+                } else {
+                    Icon(Icons.Default.Chat, null)
+                }
+            },
+            label = { Text("Chat") }, selected = false, onClick = onChat,
             colors = NavigationBarItemDefaults.colors(
                 unselectedIconColor = Color.Gray,
                 unselectedTextColor = Color.Gray
             )
         )
         NavigationBarItem(
-            icon = { Icon(Icons.Default.Folder, contentDescription = null) },
-            label = { Text("Files") },
-            selected = false,
-            onClick = onFiles,
+            icon = { Icon(Icons.Default.Folder, null) },
+            label = { Text("Files") }, selected = false, onClick = onFiles,
             colors = NavigationBarItemDefaults.colors(
                 unselectedIconColor = Color.Gray,
                 unselectedTextColor = Color.Gray
             )
         )
         NavigationBarItem(
-            icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-            label = { Text("Config") },
-            selected = false,
-            onClick = { },
+            icon = { Icon(Icons.Default.Settings, null) },
+            label = { Text("Config") }, selected = false, onClick = { },
             colors = NavigationBarItemDefaults.colors(
                 unselectedIconColor = Color.Gray,
                 unselectedTextColor = Color.Gray
