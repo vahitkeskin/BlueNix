@@ -9,6 +9,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.BluetoothConnected
 import androidx.compose.material.icons.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Folder
@@ -26,7 +28,8 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.vahitkeskin.bluenix.core.model.BluetoothDeviceDomain // BU IMPORT EKLENDİ
+import com.vahitkeskin.bluenix.core.model.BluetoothDeviceDomain
+import com.vahitkeskin.bluenix.ui.home.components.SignalStrengthIndicator
 import com.vahitkeskin.bluenix.ui.theme.HologramBlue
 import com.vahitkeskin.bluenix.ui.theme.NeonBlue
 import org.koin.compose.viewmodel.koinViewModel
@@ -36,14 +39,19 @@ import org.koin.compose.viewmodel.koinViewModel
 fun HomeScreen(
     onNavigateToChat: () -> Unit,
     onNavigateToFiles: () -> Unit,
-    onDeviceClick: (BluetoothDeviceDomain) -> Unit // YENİ PARAMETRE
+    onDeviceClick: (BluetoothDeviceDomain) -> Unit
 ) {
 
     val viewModel = koinViewModel<HomeViewModel>()
     val locationData by viewModel.locationState.collectAsState()
+    val isBluetoothOn by viewModel.isBluetoothOn.collectAsState()
 
-    // Gerçek cihaz listesini dinle
-    val nearbyDevices by viewModel.scannedDevices.collectAsState()
+    // Tüm cihaz listesi
+    val allDevices by viewModel.scannedDevices.collectAsState()
+
+    // Listeyi Eşleşmiş ve Yeni olarak ayırıyoruz (Android Ayarlar Mantığı)
+    val pairedDevices = remember(allDevices) { allDevices.filter { it.isPaired } }
+    val availableDevices = remember(allDevices) { allDevices.filter { !it.isPaired } }
 
     Scaffold(
         bottomBar = { BlueNixBottomBar(onNavigateToChat, onNavigateToFiles) },
@@ -52,7 +60,6 @@ fun HomeScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -69,15 +76,15 @@ fun HomeScreen(
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 2.sp
                 )
-                StatusChip(isOnline = true)
+                StatusChip(isOnline = isBluetoothOn)
             }
 
-            Spacer(modifier = Modifier.height(40.dp))
+            Spacer(modifier = Modifier.height(30.dp))
 
             // RADAR (Visual Core)
             Box(
                 contentAlignment = Alignment.Center,
-                modifier = Modifier.size(300.dp)
+                modifier = Modifier.size(280.dp)
             ) {
                 RadarAnimation()
 
@@ -105,9 +112,9 @@ fun HomeScreen(
                             fontWeight = FontWeight.Bold
                         )
 
-                        // Hassasiyet Göstergesi
                         val accuracy = locationData!!.accuracy
-                        val accuracyColor = if (accuracy < 5) Color.Green else if (accuracy < 10) Color.Yellow else Color.Red
+                        val accuracyColor =
+                            if (accuracy < 5) Color.Green else if (accuracy < 10) Color.Yellow else Color.Red
 
                         Text(
                             text = "Precision: ±${accuracy.toInt()}m",
@@ -124,28 +131,150 @@ fun HomeScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(40.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
-            // DİNAMİK LİSTE BAŞLIĞI
-            Text(
-                "NEARBY DEVICES (${nearbyDevices.size})",
-                style = MaterialTheme.typography.labelMedium,
-                color = Color.Gray,
-                modifier = Modifier.align(Alignment.Start)
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // LAZY COLUMN
+            // --- LİSTE BÖLÜMÜ ---
             LazyColumn(
-                modifier = Modifier.fillMaxWidth().weight(1f)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentPadding = PaddingValues(bottom = 16.dp)
             ) {
-                items(nearbyDevices) { device ->
-                    DeviceItem(
-                        name = device.name ?: "Unknown [${device.address.takeLast(4)}]",
-                        status = device.getEstimatedDistance(),
-                        onClick = { onDeviceClick(device) } // TIKLAMA BURADA BAĞLANDI
-                    )
+                // 1. Eşleşmiş Cihazlar
+                if (pairedDevices.isNotEmpty()) {
+                    item {
+                        SectionHeader("PAIRED DEVICES (${pairedDevices.size})")
+                    }
+                    items(pairedDevices) { device ->
+                        DeviceItem(
+                            device = device,
+                            onClick = { onDeviceClick(device) }
+                        )
+                    }
                 }
+
+                // 2. Kullanılabilir Cihazlar
+                if (availableDevices.isNotEmpty()) {
+                    item {
+                        SectionHeader("AVAILABLE DEVICES (${availableDevices.size})")
+                    }
+                    items(availableDevices) { device ->
+                        DeviceItem(
+                            device = device,
+                            onClick = { onDeviceClick(device) }
+                        )
+                    }
+                } else if (isBluetoothOn) {
+                    // Bluetooth açık ama cihaz yoksa veya sadece eşleşmişler varsa ve tarıyorsa
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 20.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "Scanning Frequency...",
+                                color = Color.Gray,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Şık Başlık Bileşeni
+@Composable
+fun SectionHeader(title: String) {
+    Text(
+        text = title,
+        color = NeonBlue.copy(alpha = 0.8f),
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 1.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF050B14)) // Arka planla aynı renk (yapışkan hissi)
+            .padding(vertical = 12.dp, horizontal = 4.dp)
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DeviceItem(
+    device: BluetoothDeviceDomain,
+    onClick: () -> Unit
+) {
+    val isPaired = device.isPaired
+    val itemColor = if (isPaired) Color(0xFF1A2C42) else Color(0xFF111B2E)
+    val iconColor = if (isPaired) Color(0xFF00FF9D) else NeonBlue
+
+    Card(
+        onClick = onClick,
+        colors = CardDefaults.cardColors(containerColor = itemColor),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(16.dp)
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // SOL TARA: Cihaz Türü İkonu
+            Icon(
+                imageVector = if (isPaired) Icons.Default.BluetoothConnected else Icons.Default.Bluetooth,
+                contentDescription = null,
+                tint = iconColor,
+                modifier = Modifier.size(32.dp) // Biraz büyüttük
+            )
+
+            Spacer(modifier = Modifier.width(16.dp))
+
+            // ORTA: İsim ve Adres
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = device.name,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    maxLines = 1
+                )
+                Text(
+                    text = device.address,
+                    color = Color.Gray,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+
+            // SAĞ TARAF: Mesafe ve Sinyal Gücü
+            Column(
+                horizontalAlignment = Alignment.End
+            ) {
+                // Sinyal Barları
+                SignalStrengthIndicator(level = device.getSignalLevel())
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Mesafe Bilgisi (Örn: 1.5 m)
+                Text(
+                    text = device.getEstimatedDistance(),
+                    color = NeonBlue,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold
+                )
+
+                // Debug için RSSI (İstersen kaldırabilirsin)
+                Text(
+                    text = "${device.rssi} dBm",
+                    color = Color.Gray.copy(alpha = 0.5f),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 8.sp
+                )
             }
         }
     }
@@ -164,8 +293,16 @@ fun RadarAnimation() {
 
     Canvas(modifier = Modifier.fillMaxSize()) {
         drawCircle(color = HologramBlue, radius = size.minDimension / 2, style = Stroke(width = 2f))
-        drawCircle(color = HologramBlue.copy(alpha = 0.5f), radius = size.minDimension / 3, style = Stroke(width = 2f))
-        drawCircle(color = HologramBlue.copy(alpha = 0.2f), radius = size.minDimension / 6, style = Stroke(width = 2f))
+        drawCircle(
+            color = HologramBlue.copy(alpha = 0.5f),
+            radius = size.minDimension / 3,
+            style = Stroke(width = 2f)
+        )
+        drawCircle(
+            color = HologramBlue.copy(alpha = 0.2f),
+            radius = size.minDimension / 6,
+            style = Stroke(width = 2f)
+        )
 
         rotate(rotation) {
             drawCircle(
@@ -185,40 +322,15 @@ fun RadarAnimation() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun DeviceItem(
-    name: String,
-    status: String,
-    onClick: () -> Unit // YENİ CALLBACK
-) {
-    Card(
-        onClick = onClick, // CARD TIKLAMASI BURADA
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF111B2E)),
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier.size(10.dp).clip(CircleShape).background(NeonBlue)
-            )
-            Spacer(modifier = Modifier.width(16.dp))
-            Column {
-                Text(text = name, color = Color.White, fontWeight = FontWeight.Bold)
-                Text(text = status, color = Color.Gray, style = MaterialTheme.typography.bodySmall)
-            }
-        }
-    }
-}
-
 @Composable
 fun StatusChip(isOnline: Boolean) {
     Surface(
         color = if (isOnline) NeonBlue.copy(alpha = 0.1f) else Color.Red.copy(alpha = 0.1f),
         shape = RoundedCornerShape(50),
-        border = androidx.compose.foundation.BorderStroke(1.dp, if(isOnline) NeonBlue else Color.Red)
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (isOnline) NeonBlue else Color.Red
+        )
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
