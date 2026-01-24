@@ -7,27 +7,28 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
-import com.vahitkeskin.bluenix.R
 import org.koin.android.ext.android.inject
 
 class BlueNixBackgroundService : Service() {
 
-    // Koin ile Controller'ı alıyoruz
     private val chatController: ChatController by inject()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
+        Log.w("BlueNixDebug", "SERVICE: onCreate çalıştı.")
         startForegroundServiceNotification()
 
-        // Servis başladığında Bluetooth Server'ı ayağa kaldır
+        // SUNUCUYU BAŞLAT
+        Log.w("BlueNixDebug", "SERVICE: ChatController.startHosting() tetikleniyor...")
         chatController.startHosting()
     }
 
     private fun startForegroundServiceNotification() {
-        val channelId = "bluenix_service_channel"
+        val channelId = "bluenix_service"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(channelId, "BlueNix Service", NotificationManager.IMPORTANCE_LOW)
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -35,9 +36,9 @@ class BlueNixBackgroundService : Service() {
         }
 
         val notification = NotificationCompat.Builder(this, channelId)
-            .setContentTitle("BlueNix Aktif")
+            .setContentTitle("BlueNix")
             .setContentText("Mesajlar dinleniyor...")
-            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth) // Varsayılan ikon
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
             .build()
 
         startForeground(1, notification)

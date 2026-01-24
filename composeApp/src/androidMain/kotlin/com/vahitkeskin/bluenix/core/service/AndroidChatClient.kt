@@ -3,10 +3,13 @@ package com.vahitkeskin.bluenix.core.service
 import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.content.Context
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.vahitkeskin.bluenix.core.Constants
+import java.util.LinkedList
+import java.util.Queue
 import java.util.UUID
 
 @SuppressLint("MissingPermission")
@@ -17,75 +20,170 @@ class AndroidChatClient(
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private val adapter = bluetoothManager.adapter
 
-    // Mesajı Bluetooth üzerinden gönderir
+    private var bluetoothGatt: BluetoothGatt? = null
+    private val messageQueue: Queue<ByteArray> = LinkedList()
+
+    // --- KONTROLLER ---
+    private var isWriting = false
+    private var isServiceReady = false // Servisler keşfedildi mi?
+    private var currentTargetAddress: String? = null
+
     fun sendRawData(address: String, message: String) {
-        if (adapter == null || !adapter.isEnabled) {
-            Log.e("BlueNixClient", "Bluetooth kapalı, mesaj gönderilemedi.")
-            return
+        val data = message.toByteArray(Charsets.UTF_8)
+        Log.d("BlueNixDebug", "➕ Kuyruğa Eklendi: $message")
+
+        // Hedef değiştiyse bağlantıyı sıfırla
+        if (currentTargetAddress != null && currentTargetAddress != address) {
+            closeConnection()
         }
+        currentTargetAddress = address
+        messageQueue.add(data)
+
+        // EĞER:
+        // 1. GATT nesnesi varsa
+        // 2. Servisler keşfedildiyse (READY)
+        // 3. Şu an yazma işlemi yoksa
+        // -> İşlem yap.
+        if (bluetoothGatt != null && isServiceReady && !isWriting) {
+            processQueue()
+        }
+        // EĞER GATT yoksa bağlan
+        else if (bluetoothGatt == null) {
+            connectAndSend(address)
+        }
+        // Diğer durumlarda (Gatt var ama Servis hazır değilse) bekle.
+        else {
+            Log.d("BlueNixDebug", "⏳ Servislerin hazır olması bekleniyor...")
+        }
+    }
+
+    private fun connectAndSend(address: String) {
+        if (adapter == null || !adapter.isEnabled) return
 
         val device = adapter.getRemoteDevice(address)
-        if (device == null) {
-            Log.e("BlueNixClient", "Cihaz bulunamadı: $address")
-            return
-        }
+        Log.i("BlueNixDebug", "🔌 Bağlanılıyor: $address")
 
-        Log.i("BlueNixClient", "Bağlantı başlatılıyor: $address")
-
-        // GATT Bağlantısını Başlat
-        device.connectGatt(context, false, object : BluetoothGattCallback() {
-
-            // 1. Bağlantı Durumu Değiştiğinde
+        bluetoothGatt = device.connectGatt(context, false, object : BluetoothGattCallback() {
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
-                    Log.i("BlueNixClient", "Bağlandı. Servisler keşfediliyor...")
-                    gatt.discoverServices() // Servisleri (Chat Service) ara
+                    Log.i("BlueNixDebug", "✅ Bağlandı. Önbellek temizleniyor...")
+
+                    // --- KRİTİK EKLENTİ: ÖNBELLEK TEMİZLİĞİ ---
+                    // Cihazın eski servisleri hatırlamasını engeller.
+                    val cacheCleared = refreshDeviceCache(gatt)
+                    Log.d("BlueNixDebug", "🧹 Cache Temizlendi mi? -> $cacheCleared")
+
+                    // Servis taramasını biraz gecikmeli başlat (Cache silinmesi için zaman tanı)
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        val success = gatt.discoverServices()
+                        if (!success) Log.e("BlueNixDebug", "❌ Servis taraması başlatılamadı!")
+                    }, 1000) // 1 saniye bekleme
+
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                    Log.i("BlueNixClient", "Bağlantı koptu.")
-                    gatt.close()
+                    Log.w("BlueNixDebug", "❌ Bağlantı Koptu. (Status: $status)")
+                    closeConnection() // Temiz kapat
                 }
             }
 
-            // 2. Servisler Bulunduğunda
             override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
+                    Log.d("BlueNixDebug", "🔍 Servisler Bulundu. Servis kontrol ediliyor...")
+
                     val service = gatt.getService(UUID.fromString(Constants.CHAT_SERVICE_UUID))
-                    if (service == null) {
-                        Log.e("BlueNixClient", "Chat Servisi hedef cihazda bulunamadı!")
-                        gatt.disconnect()
-                        return
+                    if (service != null) {
+                        Log.i("BlueNixDebug", "✅ Chat Servisi Doğrulandı! Kuyruk işleniyor...")
+                        isServiceReady = true // ARTIK HAZIRIZ
+                        processQueue()
+                    } else {
+                        Log.e("BlueNixDebug", "❌ HATA: Cihazda Chat Servisi (UUID: ${Constants.CHAT_SERVICE_UUID}) YOK.")
+                        // Debug: Mevcut servisleri yazdır
+                        gatt.services.forEach { s -> Log.v("BlueNixDebug", "   -> Mevcut: ${s.uuid}") }
                     }
-
-                    val characteristic = service.getCharacteristic(UUID.fromString(Constants.CHAT_CHARACTERISTIC_UUID))
-                    if (characteristic == null) {
-                        Log.e("BlueNixClient", "Karakteristik bulunamadı!")
-                        gatt.disconnect()
-                        return
-                    }
-
-                    // 3. Veriyi Yaz (Mesajı Gönder)
-                    characteristic.value = message.toByteArray(Charsets.UTF_8)
-                    characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT // Karşı tarafın onaylamasını bekle
-
-                    val success = gatt.writeCharacteristic(characteristic)
-                    Log.i("BlueNixClient", "Mesaj yazma isteği gönderildi: $success")
+                } else {
+                    Log.e("BlueNixDebug", "❌ Servis Keşfi Başarısız: $status")
                 }
             }
 
-            // 4. Yazma İşlemi Tamamlandığında
             override fun onCharacteristicWrite(
                 gatt: BluetoothGatt,
                 characteristic: BluetoothGattCharacteristic,
                 status: Int
             ) {
+                isWriting = false
                 if (status == BluetoothGatt.GATT_SUCCESS) {
-                    Log.i("BlueNixClient", "✅ Mesaj başarıyla iletildi!")
+                    Log.i("BlueNixDebug", "✅ Paket İletildi.")
                 } else {
-                    Log.e("BlueNixClient", "❌ Mesaj iletilemedi. Status: $status")
+                    Log.e("BlueNixDebug", "❌ İletim Hatası: $status")
                 }
-                // İşimiz bitti, bağlantıyı nazikçe kapat
-                gatt.disconnect()
+
+                // Sıradakini gönder
+                processQueue()
             }
         })
+    }
+
+    private fun processQueue() {
+        if (messageQueue.isEmpty()) {
+            Log.d("BlueNixDebug", "🏁 Kuyruk boşaldı.")
+            return
+        }
+
+        val gatt = bluetoothGatt
+        if (gatt == null) {
+            Log.e("BlueNixDebug", "❌ HATA: GATT null (Koptu)")
+            return
+        }
+
+        // Servis ve Karakteristik Kontrolü
+        val service = gatt.getService(UUID.fromString(Constants.CHAT_SERVICE_UUID))
+        if (service == null) {
+            Log.e("BlueNixDebug", "❌ Kritik Hata: Servis artık yok.")
+            return
+        }
+
+        val characteristic = service.getCharacteristic(UUID.fromString(Constants.CHAT_CHARACTERISTIC_UUID))
+        if (characteristic == null) {
+            Log.e("BlueNixDebug", "❌ HATA: Karakteristik bulunamadı!")
+            return
+        }
+
+        val data = messageQueue.poll()
+        if (data != null) {
+            isWriting = true
+
+            // Veri yazma ayarları (Android sürümüne göre)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                gatt.writeCharacteristic(characteristic, data, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+            } else {
+                characteristic.value = data
+                characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                gatt.writeCharacteristic(characteristic)
+            }
+
+            Log.d("BlueNixDebug", "📤 Gönderiliyor... (${data.size} byte)")
+        }
+    }
+
+    // --- GİZLİ API: Bluetooth Cache Temizleme ---
+    private fun refreshDeviceCache(gatt: BluetoothGatt): Boolean {
+        try {
+            val localMethod = gatt.javaClass.getMethod("refresh")
+            if (localMethod != null) {
+                return localMethod.invoke(gatt) as Boolean
+            }
+        } catch (e: Exception) {
+            Log.e("BlueNixDebug", "⚠️ Cache temizlenemedi: ${e.message}")
+        }
+        return false
+    }
+
+    fun closeConnection() {
+        bluetoothGatt?.close()
+        bluetoothGatt = null
+        isServiceReady = false
+        isWriting = false
+        messageQueue.clear()
+        currentTargetAddress = null
+        Log.d("BlueNixDebug", "♻️ Bağlantı ve Kuyruk Temizlendi.")
     }
 }

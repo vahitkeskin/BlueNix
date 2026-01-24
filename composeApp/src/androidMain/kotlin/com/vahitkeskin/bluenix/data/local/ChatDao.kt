@@ -11,8 +11,7 @@ interface ChatDao {
     @Query("SELECT * FROM messages WHERE deviceAddress = :address ORDER BY timestamp ASC")
     fun getMessages(address: String): Flow<List<MessageEntity>>
 
-    // LİSTE EKRANI İÇİN EN KRİTİK SORGU
-    // Her cihazdan gelen en son (MAX ID) mesajı getirir.
+    // BU SORGU HER İKİ TARAFI DA (GELEN VE GİDEN) KAPSAR
     @Query("SELECT * FROM messages WHERE id IN (SELECT MAX(id) FROM messages GROUP BY deviceAddress) ORDER BY timestamp DESC")
     fun getLastConversations(): Flow<List<MessageEntity>>
 
