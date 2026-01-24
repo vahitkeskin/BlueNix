@@ -19,6 +19,7 @@ class AndroidChatRepository(
         }
     }
 
+    // Listeyi buradan çekiyoruz
     override fun getConversations(): Flow<List<ChatMessage>> {
         return dao.getLastConversations().map { entities ->
             entities.map { it.toDomain() }
@@ -31,12 +32,9 @@ class AndroidChatRepository(
         dao.markAsRead(address)
     }
 
-    // GÖNDERDİĞİM MESAJ (Benim Ekranım İçin)
+    // Mesaj Gönderme (Benden Çıkan)
     override suspend fun sendMessage(address: String, name: String, text: String) {
-        // Önce Bluetooth ile gönder
         client.sendRawData(address, text)
-
-        // Sonra Local DB'ye yaz
         dao.insert(
             MessageEntity(
                 deviceAddress = address,
@@ -49,16 +47,16 @@ class AndroidChatRepository(
         )
     }
 
-    // ALDIĞIM MESAJ (Karşıdan Gelen)
+    // Mesaj Alma (Bana Gelen) - LİSTEYİ GÜNCELLEYEN KISIM BURASI
     override suspend fun receiveMessage(address: String, name: String, text: String) {
         dao.insert(
             MessageEntity(
                 deviceAddress = address,
                 deviceName = name,
                 text = text,
-                isFromMe = false, // <-- Burası FALSE olmalı
+                isFromMe = false, // <-- FALSE OLMALI
                 timestamp = System.currentTimeMillis(),
-                isRead = false // <-- Burası FALSE olmalı (Okunmadı)
+                isRead = false // <-- OKUNMADI
             )
         )
     }

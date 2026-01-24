@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -12,82 +13,67 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.core.content.ContextCompat
-import com.vahitkeskin.bluenix.service.BlueNixLocationService
+import com.vahitkeskin.bluenix.core.service.BlueNixBackgroundService
 
 class MainActivity : ComponentActivity() {
 
-    // İzin sonucunu dinleyen mekanizma
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        // Android 12+ (S) ve sonrası için Bluetooth Scan izni kontrolü
-        val bluetoothScanGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            permissions[Manifest.permission.BLUETOOTH_SCAN] ?: false
+        val allGranted = permissions.entries.all { it.value }
+        if (allGranted) {
+            Log.i("BlueNixDebug", "✅ Tüm izinler verildi. Servis başlatılıyor...")
+            startAppService()
         } else {
-            true // Eski sürümlerde bu izne gerek yok (Konum yetiyor)
-        }
-
-        val fineLocationGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
-        val coarseLocationGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
-
-        // Hem Konum hem Bluetooth izni varsa servisi başlat
-        if ((fineLocationGranted || coarseLocationGranted) && bluetoothScanGranted) {
-            startLocationService()
-        } else {
-            println("❌ Gerekli izinler (Bluetooth veya Konum) verilmedi.")
+            Log.e("BlueNixDebug", "❌ Bazı izinler REDDEDİLDİ! Chat çalışmayabilir.")
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
 
-        // İzinleri kontrol et ve servisi başlat
-        checkPermissionsAndStartService()
+        checkPermissionsAndStart()
 
-        setContent {
-            App()
-        }
+        setContent { App() }
     }
 
-    private fun checkPermissionsAndStartService() {
-        val permissionsToRequest = mutableListOf<String>()
+    private fun checkPermissionsAndStart() {
+        val permissions = mutableListOf<String>()
 
-        // 1. Konum İzni (Tüm cihazlar için)
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            permissionsToRequest.add(Manifest.permission.ACCESS_FINE_LOCATION)
-            permissionsToRequest.add(Manifest.permission.ACCESS_COARSE_LOCATION)
-        }
+        // Konum (Eski ve Yeni)
+        permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
+        permissions.add(Manifest.permission.ACCESS_COARSE_LOCATION)
 
-        // 2. Bluetooth İzinleri (Android 12+ / API 31+)
+        // Android 12+ (API 31) İzinleri
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
-                permissionsToRequest.add(Manifest.permission.BLUETOOTH_SCAN)
-            }
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                permissionsToRequest.add(Manifest.permission.BLUETOOTH_CONNECT)
-            }
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED) {
-                permissionsToRequest.add(Manifest.permission.BLUETOOTH_ADVERTISE)
-            }
+            permissions.add(Manifest.permission.BLUETOOTH_SCAN)
+            permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+            // --- KRİTİK EKSİK BU OLABİLİR ---
+            permissions.add(Manifest.permission.BLUETOOTH_ADVERTISE)
         }
 
-        // 3. Bildirim İzni (Android 13+ / API 33+)
+        // Android 13+ (API 33) Bildirim
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
-            }
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        if (permissionsToRequest.isNotEmpty()) {
-            permissionLauncher.launch(permissionsToRequest.toTypedArray())
+        // Eksik izinleri kontrol et
+        val missingPermissions = permissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+
+        if (missingPermissions.isNotEmpty()) {
+            Log.w("BlueNixDebug", "⚠️ İzinler eksik, kullanıcıdan isteniyor: $missingPermissions")
+            permissionLauncher.launch(missingPermissions.toTypedArray())
         } else {
-            startLocationService()
+            Log.i("BlueNixDebug", "✅ İzinler tam. Servis başlatılıyor.")
+            startAppService()
         }
     }
 
-    private fun startLocationService() {
-        val intent = Intent(this, BlueNixLocationService::class.java)
+    private fun startAppService() {
+        val intent = Intent(this, BlueNixBackgroundService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent)
         } else {
