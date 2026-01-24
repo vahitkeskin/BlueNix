@@ -67,7 +67,7 @@ class AndroidBluetoothService(
                 }
 
                 // Log'a da bakalım
-                Log.d("BlueNixBT", "Eklendi: $displayName - RSSI: ${result.rssi}")
+                //Log.d("BlueNixBT", "Eklendi: $displayName - RSSI: ${result.rssi}")
 
                 foundDevices[address] = BluetoothDeviceDomain(
                     name = displayName,
