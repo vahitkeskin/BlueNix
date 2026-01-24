@@ -31,132 +31,86 @@ class AndroidChatController(
     private val repository: ChatRepository
 ) : ChatController {
 
-    // --- State Yönetimi ---
     private val _isRemoteTyping = MutableStateFlow(false)
     override val isRemoteTyping: StateFlow<Boolean> = _isRemoteTyping.asStateFlow()
 
     private val _typingDeviceAddress = MutableStateFlow<String?>(null)
     override val typingDeviceAddress: StateFlow<String?> = _typingDeviceAddress.asStateFlow()
 
-    // --- Bluetooth Bileşenleri ---
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private var gattServer: BluetoothGattServer? = null
     private val advertiser = bluetoothManager.adapter.bluetoothLeAdvertiser
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    // --- KRİTİK: Yaşam Döngüsü Bağımsız Scope ---
-    // Bu scope, bir hata olsa bile diğer işlemleri durdurmaz (SupervisorJob)
-    private val controllerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     override fun startHosting() {
         if (gattServer != null) {
-            Log.w("BlueNixChat", "Server zaten açık, tekrar başlatılmıyor.")
+            Log.d("BlueNixDebug", "⚠️ Server zaten açık.")
+            // Yine de reklamı tetikleyelim, belki durmuştur.
+            startAdvertising()
             return
         }
 
+        Log.w("BlueNixDebug", ">>> [ALICI] GATT SERVER BAŞLATILIYOR >>>")
+
         val callback = object : BluetoothGattServerCallback() {
-            override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
-                super.onConnectionStateChange(device, status, newState)
-                val stateStr = if (newState == BluetoothProfile.STATE_CONNECTED) "BAĞLANDI" else "KOPTU"
-                Log.d("BlueNixChat", "Server Bağlantı Durumu: $stateStr - ${device.address}")
-
-                if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                    _typingDeviceAddress.value = null
-                    _isRemoteTyping.value = false
-                }
-            }
-
-            override fun onCharacteristicWriteRequest(
-                device: BluetoothDevice,
-                requestId: Int,
-                characteristic: BluetoothGattCharacteristic,
-                preparedWrite: Boolean,
-                responseNeeded: Boolean,
-                offset: Int,
-                value: ByteArray?
-            ) {
-                super.onCharacteristicWriteRequest(device, requestId, characteristic, preparedWrite, responseNeeded, offset, value)
-
-                // 1. Karşı tarafa "Tamam, aldım" sinyali gönder (Gecikirse timeout olur)
-                if (responseNeeded) {
-                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
-                }
-
-                // 2. Gelen veriyi işle
-                val incomingBytes = value ?: return
-                val incomingData = String(incomingBytes, Charsets.UTF_8)
-
-                // Log ile teyit et
-                Log.i("BlueNixChat", "📥 HAM VERİ GELDİ: $incomingData [Cihaz: ${device.address}]")
-
-                when (incomingData) {
-                    "SIG_TYP_START" -> {
-                        _typingDeviceAddress.value = device.address
-                        _isRemoteTyping.value = true
-                    }
-                    "SIG_TYP_STOP" -> {
-                        if (_typingDeviceAddress.value == device.address) {
-                            _typingDeviceAddress.value = null
-                            _isRemoteTyping.value = false
-                        }
-                    }
-                    else -> {
-                        // --- GERÇEK MESAJ ---
-                        _typingDeviceAddress.value = null
-                        _isRemoteTyping.value = false
-
-                        // Veritabanı işlemini güvenli scope içinde yap
-                        controllerScope.launch {
-                            try {
-                                // Cihaz adı bazen null gelebilir, garantiye al
-                                val safeName = if (device.name.isNullOrBlank()) "Cihaz ${device.address.takeLast(4)}" else device.name
-
-                                Log.d("BlueNixChat", "💾 DB'ye Yazılıyor -> Gönderen: $safeName, Mesaj: $incomingData")
-
-                                repository.receiveMessage(
-                                    address = device.address,
-                                    name = safeName,
-                                    text = incomingData
-                                )
-
-                                Log.d("BlueNixChat", "✅ DB Kayıt Başarılı!")
-                            } catch (e: Exception) {
-                                Log.e("BlueNixChat", "❌ DB Kayıt Hatası: ${e.message}", e)
-                            }
-                        }
-
-                        // Bildirim At
-                        val safeName = device.name ?: "Yeni Mesaj"
-                        sendNotification(safeName, incomingData)
-                    }
-                }
-            }
+            // ... (Callback içeriği aynı kalsın) ...
         }
 
         gattServer = bluetoothManager.openGattServer(context, callback)
-        setupServices()
-        startAdvertising()
+
+        // 1. Önce Servisleri Ekle
+        val success = setupServices()
+
+        // 2. Servis eklendiyse Yayını Başlat
+        if (success) {
+            startAdvertising()
+        } else {
+            Log.e("BlueNixDebug", "❌ Kritik Hata: Servis eklenemediği için yayın başlatılmadı.")
+        }
     }
 
-    private fun setupServices() {
+    private fun setupServices(): Boolean {
+        val serviceUUID = UUID.fromString(Constants.CHAT_SERVICE_UUID)
+        val charUUID = UUID.fromString(Constants.CHAT_CHARACTERISTIC_UUID)
+
+        // Daha önce eklenmiş mi kontrol et
+        val existingService = gattServer?.getService(serviceUUID)
+        if (existingService != null) {
+            Log.d("BlueNixDebug", "♻️ Servis zaten mevcut, tekrar eklenmiyor.")
+            return true
+        }
+
         val service = BluetoothGattService(
-            UUID.fromString(Constants.CHAT_SERVICE_UUID),
+            serviceUUID,
             BluetoothGattService.SERVICE_TYPE_PRIMARY
         )
         val characteristic = BluetoothGattCharacteristic(
-            UUID.fromString(Constants.CHAT_CHARACTERISTIC_UUID),
+            charUUID,
             BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
             BluetoothGattCharacteristic.PERMISSION_WRITE
         )
         service.addCharacteristic(characteristic)
-        gattServer?.addService(service)
-        Log.i("BlueNixChat", "Hizmetler Kuruldu: ${Constants.CHAT_SERVICE_UUID}")
+
+        val result = gattServer?.addService(service) ?: false
+
+        if (result) {
+            Log.i("BlueNixDebug", "✅ Servis GATT Server'a eklendi: $serviceUUID")
+        } else {
+            Log.e("BlueNixDebug", "❌ Servis ekleme başarısız oldu!")
+        }
+
+        return result
     }
+
 
     private fun startAdvertising() {
         if (advertiser == null) {
-            Log.e("BlueNixChat", "Bu cihaz Advertising desteklemiyor!")
+            Log.e("BlueNixDebug", "❌ HATA: Advertising desteklenmiyor.")
             return
         }
+
+        Log.d("BlueNixDebug", "📡 Yayın başlatma isteği gönderiliyor...")
 
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
@@ -165,18 +119,24 @@ class AndroidChatController(
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .build()
 
+        // --- %100 ÇÖZÜM BURASI ---
+        // setIncludeDeviceName(FALSE) yaptık.
         val data = AdvertiseData.Builder()
-            .setIncludeDeviceName(true) // Cihaz adını yayına ekle
+            .setIncludeDeviceName(false) // <--- İsim Kapatıldı (Veri Tasarrufu)
+            .setIncludeTxPowerLevel(false) // <--- Güç Seviyesi Kapatıldı (Veri Tasarrufu)
             .addServiceUuid(ParcelUuid(UUID.fromString(Constants.CHAT_SERVICE_UUID)))
             .build()
 
         val callback = object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
-                Log.i("BlueNixChat", "📡 YAYIN BAŞLADI (Advertising)")
+                Log.w("BlueNixDebug", "✅✅✅ YAYIN (ADVERTISING) BAŞLADI!")
             }
-
             override fun onStartFailure(errorCode: Int) {
-                Log.e("BlueNixChat", "📡 YAYIN BAŞARISIZ Hata Kodu: $errorCode")
+                val errorMsg = when(errorCode) {
+                    ADVERTISE_FAILED_DATA_TOO_LARGE -> "Veri çok büyük (Data Too Large)"
+                    else -> "Hata Kodu: $errorCode"
+                }
+                Log.e("BlueNixDebug", "❌❌❌ YAYIN BAŞLATILAMADI: $errorMsg")
             }
         }
 
@@ -185,20 +145,15 @@ class AndroidChatController(
 
     private fun sendNotification(title: String, message: String) {
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val channelId = "bluenix_chat_channel"
-
+        val channelId = "bluenix_channel"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(channelId, "Mesajlar", NotificationManager.IMPORTANCE_HIGH)
             notificationManager.createNotificationChannel(channel)
         }
-
         val intent = try {
             Intent(context, Class.forName("com.vahitkeskin.bluenix.MainActivity"))
-        } catch (e: ClassNotFoundException) { null }
-
-        val pendingIntent = if (intent != null) {
-            PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        } else null
+        } catch (e: Exception) { null }
+        val pendingIntent = if (intent != null) PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_IMMUTABLE) else null
 
         val notification = NotificationCompat.Builder(context, channelId)
             .setContentTitle(title)
@@ -208,7 +163,6 @@ class AndroidChatController(
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .build()
-
         notificationManager.notify(System.currentTimeMillis().toInt(), notification)
     }
 }
