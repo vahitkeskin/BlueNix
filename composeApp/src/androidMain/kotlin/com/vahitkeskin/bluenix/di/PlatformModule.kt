@@ -1,14 +1,41 @@
 package com.vahitkeskin.bluenix.di
 
+import android.content.Context
+import androidx.room.Room
+import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import com.vahitkeskin.bluenix.core.repository.ChatRepository
 import com.vahitkeskin.bluenix.core.service.AndroidBluetoothService
+import com.vahitkeskin.bluenix.core.service.AndroidChatClient
+import com.vahitkeskin.bluenix.core.service.AndroidChatController
 import com.vahitkeskin.bluenix.core.service.AndroidLocationService
 import com.vahitkeskin.bluenix.core.service.BluetoothService
+import com.vahitkeskin.bluenix.core.service.ChatController
 import com.vahitkeskin.bluenix.core.service.LocationService
+import com.vahitkeskin.bluenix.data.local.AppDatabase
+import com.vahitkeskin.bluenix.data.repository.AndroidChatRepository
 import org.koin.core.module.Module
 import org.koin.dsl.module
 
 actual val platformModule: Module = module {
-    // AndroidLocationService'i LocationService olarak tanıtıyoruz
     single<LocationService> { AndroidLocationService(get()) }
     single<BluetoothService> { AndroidBluetoothService(get()) }
+
+    single<AppDatabase> {
+        val context = get<Context>()
+        val dbFile = context.getDatabasePath("bluenix.db")
+        Room.databaseBuilder<AppDatabase>(
+            context = context,
+            name = dbFile.absolutePath
+        )
+            .setDriver(BundledSQLiteDriver())
+            .build()
+    }
+
+    single { get<AppDatabase>().chatDao() }
+
+    single { AndroidChatClient(get()) }
+
+    single<ChatRepository> { AndroidChatRepository(get(), get()) }
+
+    single<ChatController> { AndroidChatController(get(), get()) }
 }
