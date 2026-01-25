@@ -21,29 +21,33 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.vahitkeskin.bluenix.core.model.ChatMessage
 import org.koin.compose.viewmodel.koinViewModel
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatHistoryScreen(
-    onChatClick: (String, String) -> Unit // (DeviceName, DeviceAddress)
+fun ChatListScreen(
+    onChatClick: (String, String) -> Unit
 ) {
-    val viewModel = koinViewModel<ChatHistoryViewModel>()
+    val viewModel = koinViewModel<ChatHistoryViewModel>() // ViewModel isminize göre ayarlayın
     val conversations by viewModel.conversations.collectAsState()
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Mesajlar", fontWeight = FontWeight.Bold, color = Color.White) },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF050B14))
+                title = { Text("BlueNix Mesajlar", fontWeight = FontWeight.Bold, fontSize = 22.sp) },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color(0xFF050B14),
+                    titleContentColor = Color.White
+                )
             )
         },
         containerColor = Color(0xFF050B14)
     ) { padding ->
         if (conversations.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize().padding(padding),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("Henüz mesaj yok.", color = Color.Gray)
+            Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Text("Henüz mesajlaşma yok.", color = Color.Gray)
             }
         } else {
             LazyColumn(modifier = Modifier.padding(padding)) {
@@ -51,8 +55,6 @@ fun ChatHistoryScreen(
                     ConversationItem(
                         message = message,
                         onClick = {
-                            // Tıklanınca okundu yap ve detaya git
-                            viewModel.markAsRead(message.deviceAddress)
                             onChatClick(message.deviceName, message.deviceAddress)
                         }
                     )
@@ -67,10 +69,12 @@ private fun ConversationItem(
     message: ChatMessage,
     onClick: () -> Unit
 ) {
-    val isUnread = message.unreadCount > 0
-    val NeonBlue = Color(0xFF00F2FF)
-    val UnreadGreen = Color(0xFF00C853)
+    // Tasarım Renkleri
     val CardBg = Color(0xFF111B2E)
+    val NeonBlue = Color(0xFF00F2FF)
+    val UnreadColor = Color(0xFF00C853) // Canlı Yeşil
+    val TextColor = if (message.unreadCount > 0) Color.White else Color.LightGray
+    val FontWeightStyle = if (message.unreadCount > 0) FontWeight.Bold else FontWeight.Normal
 
     Card(
         modifier = Modifier
@@ -84,17 +88,17 @@ private fun ConversationItem(
             modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // AVATAR (Baş Harf)
+            // AVATAR (İsim Baş Harfi)
             Box(
                 modifier = Modifier
                     .size(54.dp)
                     .clip(CircleShape)
-                    .background(if (isUnread) NeonBlue else Color.DarkGray),
+                    .background(if (message.unreadCount > 0) NeonBlue else Color.DarkGray),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = message.deviceName.take(1).uppercase(),
-                    color = if (isUnread) Color.Black else Color.White,
+                    color = if (message.unreadCount > 0) Color.Black else Color.White,
                     fontWeight = FontWeight.Bold,
                     fontSize = 20.sp
                 )
@@ -102,24 +106,23 @@ private fun ConversationItem(
 
             Spacer(modifier = Modifier.width(16.dp))
 
-            // İÇERİK
+            // İSİM, MESAJ ve ZAMAN
             Column(modifier = Modifier.weight(1f)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = message.deviceName.ifBlank { "Bilinmeyen Cihaz" },
+                        text = message.deviceName,
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
-                        maxLines = 1
+                        fontSize = 16.sp
                     )
                     Text(
                         text = formatTimestamp(message.timestamp),
-                        color = if (isUnread) NeonBlue else Color.Gray,
+                        color = if (message.unreadCount > 0) NeonBlue else Color.Gray,
                         fontSize = 12.sp,
-                        fontWeight = if (isUnread) FontWeight.Bold else FontWeight.Normal
+                        fontWeight = FontWeightStyle
                     )
                 }
                 Spacer(modifier = Modifier.height(4.dp))
@@ -129,8 +132,8 @@ private fun ConversationItem(
                     }
                     Text(
                         text = message.text,
-                        color = if (isUnread) Color.White else Color.Gray,
-                        fontWeight = if (isUnread) FontWeight.Bold else FontWeight.Normal,
+                        color = TextColor,
+                        fontWeight = FontWeightStyle,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         fontSize = 14.sp
@@ -138,14 +141,14 @@ private fun ConversationItem(
                 }
             }
 
-            // ROZET (Badge)
-            if (isUnread) {
+            // OKUNMAMIŞ MESAJ SAYISI (BADGE)
+            if (message.unreadCount > 0) {
                 Spacer(modifier = Modifier.width(12.dp))
                 Box(
                     modifier = Modifier
                         .size(24.dp)
                         .clip(CircleShape)
-                        .background(UnreadGreen),
+                        .background(UnreadColor),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -158,4 +161,9 @@ private fun ConversationItem(
             }
         }
     }
+}
+
+fun formatTimestamp(timestamp: Long): String {
+    val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
+    return sdf.format(Date(timestamp))
 }

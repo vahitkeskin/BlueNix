@@ -14,6 +14,7 @@ import com.vahitkeskin.bluenix.core.service.LocationService
 import com.vahitkeskin.bluenix.data.local.AppDatabase
 import com.vahitkeskin.bluenix.data.repository.AndroidChatRepository
 import org.koin.core.module.Module
+import org.koin.dsl.bind // Eklendi
 import org.koin.dsl.module
 
 actual val platformModule: Module = module {
@@ -36,7 +37,20 @@ actual val platformModule: Module = module {
 
     single { AndroidChatClient(get()) }
 
-    single<ChatRepository> { AndroidChatRepository(get(), get()) }
+    // --- KRİTİK DEĞİŞİKLİK ---
+    // Controller artık sadece Context alıyor.
+    // 'bind ChatController::class' diyerek Interface olarak da erişilebilir yapıyoruz.
+    // Ancak Repository somut sınıfı (AndroidChatController) istediği için cast ediyoruz.
+    single {
+        AndroidChatController(get())
+    } bind AndroidChatController::class
 
-    single<ChatController> { AndroidChatController(get(), get()) }
+    // Repository, yukarıdaki Controller'ı constructor'ında alıyor.
+    // (Controller içinde de Repository'yi 'by inject' ile alıyoruz)
+    single<ChatRepository> {
+        AndroidChatRepository(get(), get(), get<AndroidChatController>())
+    }
+
+    // ViewModel'ler Interface (ChatController) isteyebilir
+    single<ChatController> { get<AndroidChatController>() }
 }

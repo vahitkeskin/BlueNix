@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -44,13 +45,13 @@ fun HomeScreen(
     val viewModel = koinViewModel<HomeViewModel>()
     val locationData by viewModel.locationState.collectAsState()
     val isBluetoothOn by viewModel.isBluetoothOn.collectAsState()
-
-    // Okunmamış mesaj sayısı (Badge için)
     val unreadCount by viewModel.unreadMessageCount.collectAsState()
-
     val allDevices by viewModel.scannedDevices.collectAsState()
 
-    // Listeyi Ayrıştır
+    // --- YENİ: Kendi Cihaz Bilgilerimiz ---
+    val myDeviceName by viewModel.myDeviceName.collectAsState()
+    val myDeviceAddress by viewModel.myDeviceAddress.collectAsState()
+
     val pairedDevices = remember(allDevices) { allDevices.filter { it.isPaired } }
     val availableDevices = remember(allDevices) { allDevices.filter { !it.isPaired } }
 
@@ -83,50 +84,78 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(30.dp))
 
-            // --- RADAR ANIMASYONU ---
+            // --- RADAR VE CİHAZ BİLGİSİ (GÜNCELLENDİ) ---
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier.size(280.dp)
             ) {
+                // 1. Arka Plan Radar Animasyonu
                 RadarAnimation()
 
-                // Ortadaki bilgi
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        imageVector = Icons.Default.BluetoothSearching,
-                        contentDescription = null,
-                        tint = NeonBlue,
-                        modifier = Modifier.size(48.dp)
+                // 2. ORTA BİLGİ EKRANI (Profesyonel Görünüm)
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    // İkon (Hafif şeffaf arka planlı)
+                    Box(
+                        modifier = Modifier
+                            .size(50.dp)
+                            .background(NeonBlue.copy(alpha = 0.1f), CircleShape)
+                            .padding(8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.BluetoothSearching,
+                            contentDescription = null,
+                            tint = NeonBlue,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Cihaz Adı (Büyük Harf ve Kalın)
+                    Text(
+                        text = myDeviceName.uppercase(),
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp
                     )
 
+                    // Cihaz Adresi (ID) - Monospace Font (Kod görünümü)
+                    Text(
+                        text = "ID: $myDeviceAddress",
+                        color = NeonBlue.copy(alpha = 0.7f),
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Medium
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Alt Durum Bilgisi (GPS veya Tarama)
                     if (locationData != null) {
-                        Text(
-                            text = "LAT: ${locationData!!.latitude.toString().take(7)}",
-                            color = NeonBlue,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "LNG: ${locationData!!.longitude.toString().take(7)}",
-                            color = NeonBlue,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold
-                        )
-
-                        val accuracy = locationData!!.accuracy
-                        val accuracyColor =
-                            if (accuracy < 5) Color.Green else if (accuracy < 10) Color.Yellow else Color.Red
-
-                        Text(
-                            text = "Precision: ±${accuracy.toInt()}m",
-                            color = accuracyColor,
-                            style = MaterialTheme.typography.labelSmall
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            // Yanıp sönen yeşil nokta efekti verilebilir
+                            Box(modifier = Modifier.size(6.dp).background(Color.Green, CircleShape))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "GPS LOCK: ±${locationData!!.accuracy.toInt()}m",
+                                color = Color.Green,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
                     } else {
                         Text(
-                            "Acquiring Satellites...",
-                            color = NeonBlue.copy(alpha = 0.7f),
-                            style = MaterialTheme.typography.bodySmall
+                            "SCANNING...",
+                            color = Color.Gray,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Light,
+                            letterSpacing = 1.sp
                         )
                     }
                 }
@@ -141,29 +170,17 @@ fun HomeScreen(
                     .weight(1f),
                 contentPadding = PaddingValues(bottom = 16.dp)
             ) {
-                // 1. Eşleşmiş Cihazlar
                 if (pairedDevices.isNotEmpty()) {
-                    item {
-                        SectionHeader("PAIRED DEVICES (${pairedDevices.size})")
-                    }
+                    item { SectionHeader("PAIRED DEVICES (${pairedDevices.size})") }
                     items(pairedDevices) { device ->
-                        DeviceItem(
-                            device = device,
-                            onClick = { onDeviceClick(device) }
-                        )
+                        DeviceItem(device = device, onClick = { onDeviceClick(device) })
                     }
                 }
 
-                // 2. Yeni Cihazlar
                 if (availableDevices.isNotEmpty()) {
-                    item {
-                        SectionHeader("AVAILABLE DEVICES (${availableDevices.size})")
-                    }
+                    item { SectionHeader("AVAILABLE DEVICES (${availableDevices.size})") }
                     items(availableDevices) { device ->
-                        DeviceItem(
-                            device = device,
-                            onClick = { onDeviceClick(device) }
-                        )
+                        DeviceItem(device = device, onClick = { onDeviceClick(device) })
                     }
                 } else if (isBluetoothOn) {
                     item {
@@ -230,6 +247,7 @@ fun DeviceItem(
             Spacer(modifier = Modifier.width(16.dp))
 
             Column(modifier = Modifier.weight(1f)) {
+                // GERÇEK İSİM GÖSTERİMİ
                 Text(
                     text = device.name,
                     color = Color.White,
@@ -240,20 +258,35 @@ fun DeviceItem(
                 Text(
                     text = device.address,
                     color = Color.Gray,
-                    style = MaterialTheme.typography.bodySmall
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                 )
             }
 
+            // SİNYAL VE MESAFE BİLGİSİ
             Column(horizontalAlignment = Alignment.End) {
-                // Sinyal Göstergesi
                 SignalStrengthIndicator(level = device.getSignalLevel())
+
                 Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = device.getEstimatedDistance(),
-                    color = NeonBlue,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold
-                )
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // MESAFE
+                    Text(
+                        text = device.getEstimatedDistance(),
+                        color = NeonBlue,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Spacer(modifier = Modifier.width(4.dp))
+
+                    // DBM DEĞERİ
+                    Text(
+                        text = "(${device.rssi} dBm)",
+                        color = Color.Gray.copy(alpha = 0.7f),
+                        fontSize = 10.sp
+                    )
+                }
             }
         }
     }
@@ -304,7 +337,8 @@ fun StatusChip(isOnline: Boolean) {
             Text(
                 text = if (isOnline) "ONLINE" else "OFFLINE",
                 color = if (isOnline) NeonBlue else Color.Red,
-                style = MaterialTheme.typography.labelSmall
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold
             )
         }
     }
