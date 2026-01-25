@@ -1,26 +1,32 @@
 package com.vahitkeskin.bluenix.ui.chat
 
-import androidx.compose.animation.core.*
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.vahitkeskin.bluenix.core.model.ChatMessage
+import kotlinx.coroutines.delay
 import org.koin.compose.viewmodel.koinViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -31,135 +37,221 @@ fun ChatScreen(
     onBackClick: () -> Unit
 ) {
     val viewModel = koinViewModel<ChatViewModel>()
-    // Mesajlar DB'den geliyor
+
+    // Veritabanından gelen mesajları canlı dinle
     val messages by viewModel.getMessages(targetDeviceAddress).collectAsState(initial = emptyList())
-    // Yazıyor durumu Controller'dan geliyor
-    val isRemoteTyping by viewModel.isRemoteTyping.collectAsState()
+
+    // Karşı tarafın "Yazıyor..." bilgisini canlı dinle
+    val isRemoteTyping by viewModel.isRemoteTyping(targetDeviceAddress).collectAsState(initial = false)
 
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
-    // Mesaj gelince en alta kaydır
-    LaunchedEffect(messages.size, isRemoteTyping) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size + (if (isRemoteTyping) 1 else 0))
+    // --- 1. BİLDİRİM YÖNETİMİ (KRİTİK) ---
+    // Bu ekrana girildiğinde Controller'a "Aktif sohbet bu" bilgisini veriyoruz.
+    // Böylece AndroidChatController, bu adresten mesaj gelirse bildirim OLUŞTURMAZ.
+    DisposableEffect(targetDeviceAddress) {
+        viewModel.setActiveChat(targetDeviceAddress)
+        onDispose {
+            // Ekrandan çıkınca (Geri tuşu veya uygulama kapanışı) aktif sohbeti temizle.
+            // Artık bildirimler tekrar gelmeye başlar.
+            viewModel.setActiveChat(null)
         }
     }
 
-    val NeonBlue = Color(0xFF00F2FF)
-    val DarkBg = Color(0xFF050B14)
-    val BubbleMy = Color(0xFF112240)
-    val BubbleOther = Color(0xFF1A1A1A)
+    // --- 2. OKUNDU BİLGİSİ VE OTOMATİK KAYDIRMA ---
+    LaunchedEffect(messages.size) {
+        // Yeni mesaj geldiyse veya ekran açıldıysa okundu yap
+        viewModel.markAsRead(targetDeviceAddress)
+        if (messages.isNotEmpty()) {
+            // En yeni mesaja (Liste ters olduğu için index 0) kaydır
+            listState.animateScrollToItem(0)
+        }
+    }
+
+    // --- 3. "YAZIYOR..." SİNYALİ GÖNDERME ---
+    // Kullanıcı yazı yazarken karşı tarafa sinyal gönderir (Debounce: 3sn duraksarsa keser)
+    LaunchedEffect(inputText) {
+        if (inputText.isNotEmpty()) {
+            viewModel.onUserTyping(targetDeviceAddress, true)
+            delay(3000)
+            viewModel.onUserTyping(targetDeviceAddress, false)
+        } else {
+            viewModel.onUserTyping(targetDeviceAddress, false)
+        }
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Column {
-                        Text(targetDeviceName, color = NeonBlue, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        Text(targetDeviceAddress, color = Color.Gray, fontSize = 10.sp)
+                        // Burada görünen isim, Home ekranından tıklanan "Gerçek İsim"dir.
+                        Text(
+                            text = targetDeviceName,
+                            color = Color.White,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        // INSTAGRAM TARZI YAZIYOR EFEKTİ
+                        AnimatedVisibility(
+                            visible = isRemoteTyping,
+                            enter = fadeIn(animationSpec = tween(300)),
+                            exit = fadeOut(animationSpec = tween(300))
+                        ) {
+                            Text(
+                                "yazıyor...",
+                                color = Color(0xFF00F2FF), // Neon Mavi
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = null, tint = NeonBlue)
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Geri",
+                            tint = Color.White
+                        )
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = DarkBg)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF111B2E))
             )
         },
-        containerColor = DarkBg
+        containerColor = Color(0xFF050B14)
     ) { padding ->
         Column(
-            modifier = Modifier.fillMaxSize().padding(padding)
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
         ) {
             // --- MESAJ LİSTESİ ---
             LazyColumn(
                 state = listState,
-                modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
-                contentPadding = PaddingValues(vertical = 10.dp)
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 8.dp),
+                reverseLayout = true // Chat standartı: En yeni mesaj altta (LazyColumn'da 0. index)
             ) {
-                items(messages) { msg ->
-                    ChatBubble(msg, NeonBlue, BubbleMy, BubbleOther)
+                // Karşı taraf yazıyorsa en alta baloncuk koy (İsteğe bağlı)
+                if (isRemoteTyping) {
+                    item { TypingBubble() }
                 }
 
-                // Yazıyor Animasyonu
-                if (isRemoteTyping) {
-                    item {
-                        TypingIndicator(NeonBlue, BubbleOther)
-                    }
+                items(messages) { msg ->
+                    MessageBubble(msg)
                 }
             }
 
             // --- GİRİŞ ALANI ---
             Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF111B2E))
+                    .padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                OutlinedTextField(
+                TextField(
                     value = inputText,
-                    onValueChange = {
-                        inputText = it
-                        // Her tuşlamada sinyal gönder
-                        viewModel.onUserTyping(targetDeviceAddress, it.isNotEmpty())
-                    },
-                    placeholder = { Text("Encrypted message...", color = Color.Gray) },
+                    onValueChange = { inputText = it },
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
+                    placeholder = { Text("Mesaj yaz...", color = Color.Gray) },
+                    keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = {
+                        if (inputText.isNotBlank()) {
+                            viewModel.sendMessage(targetDeviceAddress, targetDeviceName, inputText)
+                            inputText = ""
+                            viewModel.onUserTyping(targetDeviceAddress, false)
+                        }
+                    }),
+                    colors = TextFieldDefaults.colors(
                         focusedContainerColor = Color.Transparent,
                         unfocusedContainerColor = Color.Transparent,
-                        focusedBorderColor = NeonBlue,
-                        unfocusedBorderColor = Color.Gray,
-                        cursorColor = NeonBlue,
-                        focusedTextColor = Color.White
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        cursorColor = Color(0xFF00F2FF),
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent
                     )
                 )
-                Spacer(modifier = Modifier.width(8.dp))
+
                 IconButton(
                     onClick = {
-                        viewModel.sendMessage(targetDeviceAddress, targetDeviceName, inputText)
-                        inputText = ""
+                        if (inputText.isNotBlank()) {
+                            viewModel.sendMessage(targetDeviceAddress, targetDeviceName, inputText)
+                            inputText = ""
+                            viewModel.onUserTyping(targetDeviceAddress, false) // Temizlik
+                        }
                     },
-                    modifier = Modifier.background(NeonBlue, CircleShape)
+                    enabled = inputText.isNotBlank()
                 ) {
-                    Icon(Icons.Default.Send, contentDescription = "Send", tint = Color.Black)
+                    Icon(
+                        Icons.AutoMirrored.Filled.Send,
+                        contentDescription = "Gönder",
+                        tint = if (inputText.isNotBlank()) Color(0xFF00F2FF) else Color.Gray
+                    )
                 }
             }
         }
     }
 }
 
+// --- YARDIMCI BİLEŞENLER ---
+
 @Composable
-fun ChatBubble(message: ChatMessage, neon: Color, myColor: Color, otherColor: Color) {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        horizontalAlignment = if (message.isFromMe) Alignment.End else Alignment.Start
+fun MessageBubble(message: ChatMessage) {
+    val isMe = message.isFromMe
+    val align = if (isMe) Alignment.CenterEnd else Alignment.CenterStart
+    // Renkler: Sizinki Koyu Yeşil (WhatsApp tarzı), Karşı taraf Koyu Gri
+    val color = if (isMe) Color(0xFF005C4B) else Color(0xFF1F2C34)
+
+    // Balon Şekli: Konuşma yönüne göre köşeleri yuvarla
+    val shape = if (isMe) RoundedCornerShape(12.dp, 0.dp, 12.dp, 12.dp)
+    else RoundedCornerShape(0.dp, 12.dp, 12.dp, 12.dp)
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        contentAlignment = align
     ) {
-        Card(
-            colors = CardDefaults.cardColors(containerColor = if (message.isFromMe) myColor else otherColor),
-            shape = RoundedCornerShape(
-                topStart = 16.dp, topEnd = 16.dp,
-                bottomStart = if (message.isFromMe) 16.dp else 4.dp,
-                bottomEnd = if (message.isFromMe) 4.dp else 16.dp
-            )
+        Column(
+            modifier = Modifier
+                .widthIn(min = 80.dp, max = 280.dp)
+                .clip(shape)
+                .background(color)
+                .padding(12.dp)
         ) {
-            Text(text = message.text, color = Color.White, modifier = Modifier.padding(12.dp))
+            Text(
+                text = message.text,
+                color = Color.White,
+                fontSize = 16.sp
+            )
+
+            // Saat Bilgisi
+            Text(
+                text = formatTimestamp(message.timestamp),
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 10.sp,
+                modifier = Modifier.align(Alignment.End).padding(top = 4.dp)
+            )
         }
     }
 }
 
 @Composable
-fun TypingIndicator(neon: Color, bgColor: Color) {
-    val alpha = rememberInfiniteTransition().animateFloat(
-        initialValue = 0.2f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(animation = tween(600), repeatMode = RepeatMode.Reverse)
-    )
-    Row(
-        modifier = Modifier.padding(vertical = 4.dp).background(bgColor, RoundedCornerShape(16.dp)).padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically
+fun TypingBubble() {
+    Box(
+        modifier = Modifier
+            .padding(vertical = 4.dp)
+            .clip(RoundedCornerShape(0.dp, 12.dp, 12.dp, 12.dp))
+            .background(Color(0xFF1F2C34))
+            .padding(12.dp)
     ) {
-        Text("Typing", color = neon, fontSize = 12.sp)
-        Text("...", color = neon, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.alpha(alpha.value))
+        // Basit bir animasyonlu nokta efekti eklenebilir, şimdilik statik
+        Text("...", color = Color.Gray, fontWeight = FontWeight.Bold, fontSize = 18.sp)
     }
 }

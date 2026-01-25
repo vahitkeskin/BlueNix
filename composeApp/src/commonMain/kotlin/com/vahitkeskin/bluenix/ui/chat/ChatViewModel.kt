@@ -5,9 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.vahitkeskin.bluenix.core.model.ChatMessage
 import com.vahitkeskin.bluenix.core.repository.ChatRepository
 import com.vahitkeskin.bluenix.core.service.ChatController
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 class ChatViewModel(
@@ -15,35 +13,48 @@ class ChatViewModel(
     private val chatController: ChatController
 ) : ViewModel() {
 
-    // Controller'daki 'Yazıyor' durumunu UI'a taşı
-    val isRemoteTyping: StateFlow<Boolean> = chatController.isRemoteTyping
-
     init {
-        // ViewModel oluştuğunda sunucuyu (dinlemeyi) başlat
+        // ViewModel başladığında sunucunun (GATT Server) hazır olduğundan emin ol
         chatController.startHosting()
     }
 
-    // Mesajları DB'den anlık çek
+    // 1. "Yazıyor..." durumunu dinle (Adrese özel filtreleme Repository içinde yapılır)
+    fun isRemoteTyping(address: String): Flow<Boolean> {
+        return repository.isRemoteTyping(address)
+    }
+
+    // 2. Mesajları çek
     fun getMessages(address: String): Flow<List<ChatMessage>> {
         return repository.getMessages(address)
     }
 
-    // Mesaj Gönder
+    // 3. Mesaj Gönder
     fun sendMessage(address: String, name: String, text: String) {
         if (text.isBlank()) return
 
         viewModelScope.launch {
-            // 1. Mesajı gönder ve kaydet
+            // Önce DB'ye kaydet ve gönder
             repository.sendMessage(address, name, text)
-            // 2. Yazmayı durdur sinyali gönder (Temizlik)
+            // Gönderim yapıldığı için "Yazıyor" sinyalini durdur
             repository.sendTypingSignal(address, false)
         }
     }
 
-    // Kullanıcı harflere basınca çalışır
+    // 4. Kullanıcı yazarken sinyal gönder
     fun onUserTyping(address: String, isTyping: Boolean) {
         viewModelScope.launch {
             repository.sendTypingSignal(address, isTyping)
         }
+    }
+
+    // 5. Mesajları okundu olarak işaretle
+    fun markAsRead(address: String) {
+        viewModelScope.launch {
+            repository.markAsRead(address)
+        }
+    }
+
+    fun setActiveChat(address: String?) {
+        chatController.setActiveChat(address)
     }
 }

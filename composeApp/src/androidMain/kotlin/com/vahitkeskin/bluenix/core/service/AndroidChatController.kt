@@ -22,147 +22,161 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.koin.core.component.KoinComponent
+import org.koin.core.component.inject
 import java.util.UUID
 
 @SuppressLint("MissingPermission")
 class AndroidChatController(
-    private val context: Context,
-    private val repository: ChatRepository
-) : ChatController {
+    private val context: Context
+) : ChatController, KoinComponent {
 
-    private val _isRemoteTyping = MutableStateFlow(false)
-    override val isRemoteTyping: StateFlow<Boolean> = _isRemoteTyping.asStateFlow()
+    private val repository: ChatRepository by inject()
 
-    private val _typingDeviceAddress = MutableStateFlow<String?>(null)
-    override val typingDeviceAddress: StateFlow<String?> = _typingDeviceAddress.asStateFlow()
+    private val _remoteTypingState = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    override val remoteTypingState: StateFlow<Map<String, Boolean>> = _remoteTypingState.asStateFlow()
+
+    // Şu an açık olan sohbetin adresi (Bildirimleri engellemek için)
+    private var activeChatAddress: String? = null
 
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+    private val adapter = bluetoothManager.adapter
     private var gattServer: BluetoothGattServer? = null
-    private val advertiser = bluetoothManager.adapter.bluetoothLeAdvertiser
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-
-    override fun startHosting() {
-        if (gattServer != null) {
-            Log.d("BlueNixDebug", "⚠️ Server zaten açık.")
-            // Yine de reklamı tetikleyelim, belki durmuştur.
-            startAdvertising()
-            return
-        }
-
-        Log.w("BlueNixDebug", ">>> [ALICI] GATT SERVER BAŞLATILIYOR >>>")
-
-        val callback = object : BluetoothGattServerCallback() {
-            // ... (Callback içeriği aynı kalsın) ...
-        }
-
-        gattServer = bluetoothManager.openGattServer(context, callback)
-
-        // 1. Önce Servisleri Ekle
-        val success = setupServices()
-
-        // 2. Servis eklendiyse Yayını Başlat
-        if (success) {
-            startAdvertising()
-        } else {
-            Log.e("BlueNixDebug", "❌ Kritik Hata: Servis eklenemediği için yayın başlatılmadı.")
-        }
+    // UI Tarafından çağrılır: Hangi sohbette olduğumuzu set eder
+    override fun setActiveChat(address: String?) {
+        activeChatAddress = address?.uppercase() // Garanti olsun diye büyük harfe çevir
     }
 
-    private fun setupServices(): Boolean {
-        val serviceUUID = UUID.fromString(Constants.CHAT_SERVICE_UUID)
-        val charUUID = UUID.fromString(Constants.CHAT_CHARACTERISTIC_UUID)
+    override fun startHosting() {
+        if (adapter == null || !adapter.isEnabled) return
+        if (gattServer != null) gattServer?.close()
 
-        // Daha önce eklenmiş mi kontrol et
-        val existingService = gattServer?.getService(serviceUUID)
-        if (existingService != null) {
-            Log.d("BlueNixDebug", "♻️ Servis zaten mevcut, tekrar eklenmiyor.")
-            return true
+        val callback = object : BluetoothGattServerCallback() {
+            override fun onServiceAdded(status: Int, service: BluetoothGattService?) {
+                if (status == BluetoothGatt.GATT_SUCCESS) startAdvertising()
+            }
+
+            override fun onCharacteristicWriteRequest(
+                device: BluetoothDevice, requestId: Int, characteristic: BluetoothGattCharacteristic,
+                preparedWrite: Boolean, responseNeeded: Boolean, offset: Int, value: ByteArray?
+            ) {
+                super.onCharacteristicWriteRequest(device, requestId, characteristic, preparedWrite, responseNeeded, offset, value)
+                if (responseNeeded) {
+                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
+                }
+
+                val incomingBytes = value ?: return
+                val incomingData = String(incomingBytes, Charsets.UTF_8)
+                val address = device.address
+
+                when (incomingData) {
+                    "SIG_TYP_START" -> _remoteTypingState.update { it + (address to true) }
+                    "SIG_TYP_STOP" -> _remoteTypingState.update { it + (address to false) }
+                    else -> {
+                        _remoteTypingState.update { it + (address to false) }
+                        scope.launch {
+                            // --- İSİM DÜZELTME HAMLESİ ---
+                            // Gelen mesajın kimden geldiğini bulurken "Unknown" yerine gerçek ismi zorla.
+                            val safeName = getBestDeviceName(device)
+
+                            // 1. Veritabanına kaydet (Listede isim düzelsin diye safeName gönderiyoruz)
+                            repository.receiveMessage(address, safeName, incomingData)
+
+                            // 2. Bildirim Kontrolü
+                            // Eğer şu an bu kişiyle konuşmuyorsak bildirim gönder
+                            if (activeChatAddress != address.uppercase()) {
+                                sendNotification(safeName, incomingData, address)
+                            }
+                        }
+                    }
+                }
+            }
         }
+        gattServer = bluetoothManager.openGattServer(context, callback)
+        addServicesToGattServer()
+    }
 
-        val service = BluetoothGattService(
-            serviceUUID,
-            BluetoothGattService.SERVICE_TYPE_PRIMARY
-        )
+    // Cihaz ismini bulmak için en iyi yöntem
+    private fun getBestDeviceName(device: BluetoothDevice): String {
+        // 1. Cihazın kendi ismi var mı?
+        if (!device.name.isNullOrBlank()) return device.name
+
+        // 2. Yoksa, Eşleşmiş (Bonded) cihazlar listesine bak (Orada isim kesin vardır)
+        val bondedMatch = adapter.bondedDevices.find { it.address == device.address }
+        if (bondedMatch?.name != null) return bondedMatch.name
+
+        // 3. Hiçbiri yoksa Adresi döndür
+        return "Cihaz ${device.address.takeLast(5)}"
+    }
+
+    private fun addServicesToGattServer() {
+        if (gattServer == null) return
+        val service = BluetoothGattService(UUID.fromString(Constants.CHAT_SERVICE_UUID), BluetoothGattService.SERVICE_TYPE_PRIMARY)
         val characteristic = BluetoothGattCharacteristic(
-            charUUID,
+            UUID.fromString(Constants.CHAT_CHARACTERISTIC_UUID),
             BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
             BluetoothGattCharacteristic.PERMISSION_WRITE
         )
         service.addCharacteristic(characteristic)
-
-        val result = gattServer?.addService(service) ?: false
-
-        if (result) {
-            Log.i("BlueNixDebug", "✅ Servis GATT Server'a eklendi: $serviceUUID")
-        } else {
-            Log.e("BlueNixDebug", "❌ Servis ekleme başarısız oldu!")
-        }
-
-        return result
+        gattServer?.addService(service)
     }
 
-
     private fun startAdvertising() {
-        if (advertiser == null) {
-            Log.e("BlueNixDebug", "❌ HATA: Advertising desteklenmiyor.")
-            return
-        }
-
-        Log.d("BlueNixDebug", "📡 Yayın başlatma isteği gönderiliyor...")
-
+        val advertiser = adapter.bluetoothLeAdvertiser ?: return
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setConnectable(true)
-            .setTimeout(0)
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .build()
 
-        // --- %100 ÇÖZÜM BURASI ---
-        // setIncludeDeviceName(FALSE) yaptık.
-        val data = AdvertiseData.Builder()
-            .setIncludeDeviceName(false) // <--- İsim Kapatıldı (Veri Tasarrufu)
-            .setIncludeTxPowerLevel(false) // <--- Güç Seviyesi Kapatıldı (Veri Tasarrufu)
+        // İSİM GÖSTERİMİ İÇİN:
+        // UUID'yi AdvertiseData'ya, İsmi ScanResponse'a koyuyoruz.
+        val advertiseData = AdvertiseData.Builder()
+            .setIncludeDeviceName(false)
+            .setIncludeTxPowerLevel(false)
             .addServiceUuid(ParcelUuid(UUID.fromString(Constants.CHAT_SERVICE_UUID)))
             .build()
 
-        val callback = object : AdvertiseCallback() {
-            override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
-                Log.w("BlueNixDebug", "✅✅✅ YAYIN (ADVERTISING) BAŞLADI!")
-            }
-            override fun onStartFailure(errorCode: Int) {
-                val errorMsg = when(errorCode) {
-                    ADVERTISE_FAILED_DATA_TOO_LARGE -> "Veri çok büyük (Data Too Large)"
-                    else -> "Hata Kodu: $errorCode"
-                }
-                Log.e("BlueNixDebug", "❌❌❌ YAYIN BAŞLATILAMADI: $errorMsg")
-            }
-        }
+        val scanResponse = AdvertiseData.Builder()
+            .setIncludeDeviceName(true) // İsim burada gidiyor
+            .build()
 
-        advertiser.startAdvertising(settings, data, callback)
+        advertiser.startAdvertising(settings, advertiseData, scanResponse, object : AdvertiseCallback() {})
     }
 
-    private fun sendNotification(title: String, message: String) {
+    private fun sendNotification(title: String, message: String, address: String) {
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val channelId = "bluenix_channel"
+        val channelId = "chat_msg_channel"
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(channelId, "Mesajlar", NotificationManager.IMPORTANCE_HIGH)
+            val channel = NotificationChannel(channelId, "BlueNix Mesajları", NotificationManager.IMPORTANCE_HIGH)
             notificationManager.createNotificationChannel(channel)
         }
+
         val intent = try {
-            Intent(context, Class.forName("com.vahitkeskin.bluenix.MainActivity"))
+            Intent(context, Class.forName("com.vahitkeskin.bluenix.MainActivity")).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                putExtra("targetDeviceAddress", address)
+            }
         } catch (e: Exception) { null }
-        val pendingIntent = if (intent != null) PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_IMMUTABLE) else null
+
+        val pendingIntent = if (intent != null) {
+            PendingIntent.getActivity(context, address.hashCode(), intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        } else null
 
         val notification = NotificationCompat.Builder(context, channelId)
-            .setContentTitle(title)
+            .setContentTitle(title) // Artık burada Gerçek İsim yazacak
             .setContentText(message)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .build()
-        notificationManager.notify(System.currentTimeMillis().toInt(), notification)
+
+        notificationManager.notify(address.hashCode(), notification)
     }
 }
