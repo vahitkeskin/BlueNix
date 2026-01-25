@@ -32,17 +32,40 @@ class HomeViewModel(
     val isBluetoothOn: StateFlow<Boolean> = bluetoothService.isBluetoothEnabled()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
-    // YENİ: Okunmamış mesaj sayısı
+    // Okunmamış mesaj sayısı
     val unreadMessageCount: StateFlow<Int> = chatRepository.getUnreadCount()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
+    // Kendi Cihaz Bilgilerimiz
+    private val _myDeviceName = MutableStateFlow("Loading...")
+    val myDeviceName: StateFlow<String> = _myDeviceName.asStateFlow()
+
+    private val _myDeviceAddress = MutableStateFlow("...")
+    val myDeviceAddress: StateFlow<String> = _myDeviceAddress.asStateFlow()
+
     init {
+        fetchMyDeviceInfo()
         startTracking()
+    }
+
+    private fun fetchMyDeviceInfo() {
+        _myDeviceName.value = bluetoothService.getMyDeviceName()
+        _myDeviceAddress.value = bluetoothService.getMyDeviceAddress()
     }
 
     private fun startTracking() {
         viewModelScope.launch {
-            // Konum Takibi
+
+            // 1. ADIM: Eşleşmiş (Paired) Cihazları Başlangıçta Yükle
+            val pairedDevices = try {
+                bluetoothService.getPairedDevices()
+            } catch (e: Exception) {
+                emptyList()
+            }
+            // İlk açılışta listeyi doldur
+            _scannedDevices.value = pairedDevices
+
+            // 2. ADIM: Konum Takibi
             launch {
                 try {
                     locationService.getLocationUpdates().collect { data ->
@@ -53,12 +76,16 @@ class HomeViewModel(
                 }
             }
 
-            // Bluetooth Taraması
+            // 3. ADIM: Canlı Bluetooth Taraması
             launch {
                 try {
-                    bluetoothService.scanDevices().collect { devices ->
-                        // Sadece ismi olan veya sinyali güçlü cihazları filtreleyebilirsin
-                        _scannedDevices.value = devices
+                    bluetoothService.scanDevices().collect { scannedList ->
+                        // ÖNEMLİ: Eşleşmiş cihazlar ile yeni bulunanları BİRLEŞTİR
+                        // Aynı cihaza (adrese) sahip olanları filtrele (distinctBy)
+                        val combinedList = (pairedDevices + scannedList)
+                            .distinctBy { it.address }
+
+                        _scannedDevices.value = combinedList
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()

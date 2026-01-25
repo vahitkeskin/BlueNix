@@ -5,8 +5,9 @@ data class ChatMessage(
     val text: String,
     val isFromMe: Boolean,
     val timestamp: Long = 0L,
-    val deviceName: String = "",   // Yeni Eklendi
-    val deviceAddress: String = "" // Yeni Eklendi
+    val deviceName: String = "",
+    val deviceAddress: String = "",
+    val unreadCount: Int = 0 // <-- YENİ: Listede rozet (badge) göstermek için
 )
 
 // Ortak platformda UUID olmadığı için basit bir random ID üreteci
