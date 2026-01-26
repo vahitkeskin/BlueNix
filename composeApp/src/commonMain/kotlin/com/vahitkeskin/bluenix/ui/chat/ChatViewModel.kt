@@ -22,7 +22,7 @@ class ChatViewModel(
         chatController.setActiveChat(address)
 
         if (address != null) {
-            // YENİ: Bağlantıyı başlat (Coroutine içinde)
+            println("ChatViewModel: Sohbet açıldı, bağlantı tazeleniyor -> $address")
             connectToDevice(address)
         }
     }

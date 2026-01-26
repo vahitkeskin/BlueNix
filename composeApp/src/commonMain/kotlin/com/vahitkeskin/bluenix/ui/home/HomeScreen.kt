@@ -56,14 +56,12 @@ fun HomeScreen(
     val availableDevices = remember(allDevices) { allDevices.filter { !it.isPaired } }
 
     Scaffold(
-        bottomBar = { BlueNixBottomBar(onNavigateToChat, onNavigateToFiles, unreadCount) },
         containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .padding(16.dp),
+                .padding(horizontal = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // --- HEADER ---
@@ -379,55 +377,5 @@ fun RadarAnimation() {
                 strokeWidth = 4f
             )
         }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun BlueNixBottomBar(onChat: () -> Unit, onFiles: () -> Unit, unreadCount: Int = 0) {
-    NavigationBar(containerColor = Color(0xFF050B14), contentColor = NeonBlue) {
-        NavigationBarItem(
-            icon = { Icon(Icons.Default.BluetoothSearching, null) },
-            label = { Text("Radar") }, selected = true, onClick = { },
-            colors = NavigationBarItemDefaults.colors(
-                selectedIconColor = NeonBlue,
-                selectedTextColor = NeonBlue,
-                indicatorColor = Color(0xFF112240),
-                unselectedIconColor = Color.Gray,
-                unselectedTextColor = Color.Gray
-            )
-        )
-        NavigationBarItem(
-            icon = {
-                if (unreadCount > 0) {
-                    BadgedBox(badge = { Badge { Text(text = unreadCount.toString()) } }) {
-                        Icon(Icons.Default.Chat, null)
-                    }
-                } else {
-                    Icon(Icons.Default.Chat, null)
-                }
-            },
-            label = { Text("Chat") }, selected = false, onClick = onChat,
-            colors = NavigationBarItemDefaults.colors(
-                unselectedIconColor = Color.Gray,
-                unselectedTextColor = Color.Gray
-            )
-        )
-        NavigationBarItem(
-            icon = { Icon(Icons.Default.Folder, null) },
-            label = { Text("Files") }, selected = false, onClick = onFiles,
-            colors = NavigationBarItemDefaults.colors(
-                unselectedIconColor = Color.Gray,
-                unselectedTextColor = Color.Gray
-            )
-        )
-        NavigationBarItem(
-            icon = { Icon(Icons.Default.Settings, null) },
-            label = { Text("Config") }, selected = false, onClick = { },
-            colors = NavigationBarItemDefaults.colors(
-                unselectedIconColor = Color.Gray,
-                unselectedTextColor = Color.Gray
-            )
-        )
     }
 }
