@@ -13,7 +13,11 @@ import org.koin.android.ext.android.inject
 
 class BlueNixBackgroundService : Service() {
 
+    // Inject ettiğimiz ChatController (AndroidChatController)
     private val chatController: ChatController by inject()
+
+    // Eğer Client'a da buradan erişebiliyorsan onu da inject et, yoksa Repository üzerinden halledeceğiz.
+    // Şimdilik sadece sunucuyu kapatmak bile büyük fark yaratır.
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -22,9 +26,18 @@ class BlueNixBackgroundService : Service() {
         Log.w("BlueNixDebug", "SERVICE: onCreate çalıştı.")
         startForegroundServiceNotification()
 
-        // SUNUCUYU BAŞLAT
         Log.w("BlueNixDebug", "SERVICE: ChatController.startHosting() tetikleniyor...")
         chatController.startHosting()
+    }
+
+    // --- %100 ÇÖZÜM: ONDESTROY TEMİZLİĞİ ---
+    override fun onDestroy() {
+        Log.w("BlueNixDebug", "SERVICE: onDestroy çalıştı. Kaynaklar temizleniyor...")
+
+        // Eğer AndroidChatController sınıfına stopHosting eklediysen (Interface'e de eklemen gerekebilir):
+        (chatController as? AndroidChatController)?.stopHosting()
+
+        super.onDestroy()
     }
 
     private fun startForegroundServiceNotification() {
