@@ -50,11 +50,11 @@ fun ChatScreen(
     // --- 1. BİLDİRİM YÖNETİMİ (KRİTİK) ---
     // Bu ekrana girildiğinde Controller'a "Aktif sohbet bu" bilgisini veriyoruz.
     // Böylece AndroidChatController, bu adresten mesaj gelirse bildirim OLUŞTURMAZ.
-    DisposableEffect(targetDeviceAddress) {
+    DisposableEffect(Unit) {
+        // Ekran açıldı -> Bağlan
         viewModel.setActiveChat(targetDeviceAddress)
         onDispose {
-            // Ekrandan çıkınca (Geri tuşu veya uygulama kapanışı) aktif sohbeti temizle.
-            // Artık bildirimler tekrar gelmeye başlar.
+            // Ekran kapandı -> Aktif sohbeti temizle
             viewModel.setActiveChat(null)
         }
     }
