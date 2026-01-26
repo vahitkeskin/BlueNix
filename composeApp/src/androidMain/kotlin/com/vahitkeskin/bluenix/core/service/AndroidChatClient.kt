@@ -39,21 +39,31 @@ class AndroidChatClient(
 
     fun connect(address: String) {
         if (adapter == null || !adapter.isEnabled) return
-        if (activeGatt != null && activeGatt?.device?.address == address && isConnected) return
 
-        Log.i("BlueNixClient", "Bağlantı başlatılıyor: $address")
+        // --- DEĞİŞİKLİK BURADA: ESKİ BAĞLANTIYI KESİN OLARAK ÖLDÜR ---
+        // "Zaten bağlıyım" kontrolünü KALDIRDIK. Her connect çağrısında
+        // bağlantıyı tazelemeye zorluyoruz.
+
+        Log.w("BlueNixClient", "♻️ Bağlantı tazeleniyor: $address")
+
+        // Varsa eskiyi kapat
         disconnect()
 
-        try {
-            val device = adapter.getRemoteDevice(address)
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                activeGatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
-            } else {
-                activeGatt = device.connectGatt(context, false, gattCallback)
+        // Kısa bir bekleme (Bluetooth stack'inin nefes alması için)
+        Handler(Looper.getMainLooper()).postDelayed({
+            try {
+                val device = adapter.getRemoteDevice(address)
+                Log.i("BlueNixClient", "🔌 Yeni bağlantı başlatılıyor...")
+
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                    activeGatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+                } else {
+                    activeGatt = device.connectGatt(context, false, gattCallback)
+                }
+            } catch (e: Exception) {
+                Log.e("BlueNixClient", "Bağlantı hatası: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.e("BlueNixClient", "Bağlantı hatası: ${e.message}")
-        }
+        }, 150) // 150ms gecikme
     }
 
     fun sendRawData(address: String, data: String) {
