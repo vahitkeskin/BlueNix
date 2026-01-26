@@ -1,16 +1,23 @@
 package com.vahitkeskin.bluenix.core.model
 
+import java.util.UUID
+
+// 1. Durum Enum'ı (Domain katmanında da olmalı)
+enum class MessageStatus { SENDING, SENT, FAILED, RECEIVED }
+
+// 2. ChatMessage Modeli
 data class ChatMessage(
-    val id: String = "",
+    val id: String = generateRandomId(),
     val text: String,
     val isFromMe: Boolean,
-    val timestamp: Long = 0L,
+    val timestamp: Long = getCurrentTime(),
     val deviceName: String = "",
     val deviceAddress: String = "",
-    val unreadCount: Int = 0 // <-- YENİ: Listede rozet (badge) göstermek için
+    val unreadCount: Int = 0,
+    val status: MessageStatus = MessageStatus.SENT
 )
 
-// Ortak platformda UUID olmadığı için basit bir random ID üreteci
-fun generateRandomId(): String = (0..100000).random().toString()
-// Şimdilik basit timestamp
-fun getCurrentTime(): Long = 0L // Gerçek bir Clock implementasyonu eklenebilir
+// 3. Helper Fonksiyonlar (Düzeltildi)
+fun generateRandomId(): String = UUID.randomUUID().toString()
+
+fun getCurrentTime(): Long = System.currentTimeMillis()

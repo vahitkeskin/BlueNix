@@ -1,5 +1,6 @@
 package com.vahitkeskin.bluenix.ui.home
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -300,12 +301,25 @@ fun SignalStrengthIndicator(level: Int, modifier: Modifier = Modifier) {
         for (i in 1..4) {
             val isActive = i <= level
             val barHeight = (i * 4).dp
+
+            // --- ANİMASYON KISMI ---
+            // Hedef rengi belirliyoruz: Eğer aktifse NeonBlue, değilse Gri
+            val targetColor = if (isActive) NeonBlue else Color.Gray.copy(alpha = 0.3f)
+
+            // animateColorAsState, targetColor her değiştiğinde animasyonu tetikler
+            val animatedColor by animateColorAsState(
+                targetValue = targetColor,
+                // Animasyon süresi ve tipi (300ms yumuşak geçiş)
+                animationSpec = tween(durationMillis = 300),
+                label = "SignalColorAnimation"
+            )
+
             Box(
                 modifier = Modifier
                     .width(4.dp)
                     .height(barHeight)
                     .background(
-                        color = if (isActive) NeonBlue else Color.Gray.copy(alpha = 0.3f),
+                        color = animatedColor, // Buraya animasyonlu rengi veriyoruz
                         shape = RoundedCornerShape(2.dp)
                     )
             )
