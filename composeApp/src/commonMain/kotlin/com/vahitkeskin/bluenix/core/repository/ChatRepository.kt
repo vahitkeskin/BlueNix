@@ -4,6 +4,10 @@ import com.vahitkeskin.bluenix.core.model.ChatMessage
 import kotlinx.coroutines.flow.Flow
 
 interface ChatRepository {
+
+    // Sohbet ekranı açıldığında bağlantıyı tazelemek için gerekli
+    suspend fun prepareConnection(address: String)
+
     // 1. Belirli bir kişiyle olan mesaj geçmişi (Anlık)
     fun getMessages(deviceAddress: String): Flow<List<ChatMessage>>
 
@@ -13,8 +17,7 @@ interface ChatRepository {
     // 3. Uygulama genelindeki toplam okunmamış mesaj sayısı (Tab/Icon Badge için)
     fun getUnreadCount(): Flow<Int>
 
-    // 4. Karşı tarafın "Yazıyor..." durumunu dinle (Instagram Tarzı için GEREKLİ)
-    // Bu fonksiyon Controller'daki anlık durumu UI'a taşır.
+    // 4. Karşı tarafın "Yazıyor..." durumunu dinle
     fun isRemoteTyping(address: String): Flow<Boolean>
 
     // 5. Mesaj Gönder (Hem DB'ye kaydeder hem Bluetooth ile atar)

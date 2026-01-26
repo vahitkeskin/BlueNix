@@ -14,47 +14,65 @@ class ChatViewModel(
 ) : ViewModel() {
 
     init {
-        // ViewModel başladığında sunucunun (GATT Server) hazır olduğundan emin ol
         chatController.startHosting()
     }
 
-    // 1. "Yazıyor..." durumunu dinle (Adrese özel filtreleme Repository içinde yapılır)
-    fun isRemoteTyping(address: String): Flow<Boolean> {
-        return repository.isRemoteTyping(address)
+    // Sohbet ekranı açıldığında bu fonksiyon çağrılıyor
+    fun setActiveChat(address: String?) {
+        chatController.setActiveChat(address)
+
+        if (address != null) {
+            // YENİ: Bağlantıyı başlat (Coroutine içinde)
+            connectToDevice(address)
+        }
     }
 
-    // 2. Mesajları çek
-    fun getMessages(address: String): Flow<List<ChatMessage>> {
-        return repository.getMessages(address)
+    private fun connectToDevice(address: String) {
+        viewModelScope.launch {
+            try {
+                // Repository üzerinden Client'a "Bağlan" emri ver
+                repository.prepareConnection(address)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
-    // 3. Mesaj Gönder
+    // YENİ: Mesaj gönderirken de bağlantıyı kontrol et!
     fun sendMessage(address: String, name: String, text: String) {
         if (text.isBlank()) return
 
         viewModelScope.launch {
-            // Önce DB'ye kaydet ve gönder
+            // KRİTİK: Mesaj göndermeden önce bağlantıyı tekrar dürt!
+            // Eğer zaten bağlıysa bu işlem çok hızlı geçer, değilse bağlar.
+            repository.prepareConnection(address)
+
             repository.sendMessage(address, name, text)
-            // Gönderim yapıldığı için "Yazıyor" sinyalini durdur
             repository.sendTypingSignal(address, false)
         }
     }
 
-    // 4. Kullanıcı yazarken sinyal gönder
+    // Veritabanından mesajları anlık çeker
+    fun getMessages(address: String): Flow<List<ChatMessage>> {
+        return repository.getMessages(address)
+    }
+
+    // Karşı tarafın "Yazıyor..." durumunu dinler
+    fun isRemoteTyping(address: String): Flow<Boolean> {
+        return repository.isRemoteTyping(address)
+    }
+
+    // Kullanıcı klavyede yazarken çağrılır
     fun onUserTyping(address: String, isTyping: Boolean) {
         viewModelScope.launch {
             repository.sendTypingSignal(address, isTyping)
         }
     }
 
-    // 5. Mesajları okundu olarak işaretle
+    // Mesajları okundu olarak işaretle
     fun markAsRead(address: String) {
         viewModelScope.launch {
             repository.markAsRead(address)
         }
-    }
-
-    fun setActiveChat(address: String?) {
-        chatController.setActiveChat(address)
     }
 }
