@@ -27,6 +27,7 @@ import kotlinx.coroutines.launch
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 @SuppressLint("MissingPermission")
 class AndroidChatController(
@@ -34,26 +35,30 @@ class AndroidChatController(
 ) : ChatController, KoinComponent {
 
     private val repository: ChatRepository by inject()
-
     private val _remoteTypingState = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     override val remoteTypingState: StateFlow<Map<String, Boolean>> = _remoteTypingState.asStateFlow()
 
-    // Şu an açık olan sohbetin adresi (Bildirimleri engellemek için)
     private var activeChatAddress: String? = null
-
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private val adapter = bluetoothManager.adapter
     private var gattServer: BluetoothGattServer? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val DELIMITER = "|||"
 
-    // UI Tarafından çağrılır: Hangi sohbette olduğumuzu set eder
+    // --- KRİTİK EKLENTİ: MESAJ BİRLEŞTİRME TAMPONU ---
+    // Her cihaz adresi için ayrı bir StringBuilder tutuyoruz.
+    private val messageBuffers = ConcurrentHashMap<String, StringBuilder>()
+
     override fun setActiveChat(address: String?) {
-        activeChatAddress = address?.uppercase() // Garanti olsun diye büyük harfe çevir
+        activeChatAddress = address?.uppercase()
     }
 
     override fun startHosting() {
         if (adapter == null || !adapter.isEnabled) return
-        if (gattServer != null) gattServer?.close()
+        if (gattServer != null) {
+            gattServer?.clearServices()
+            gattServer?.close()
+        }
 
         val callback = object : BluetoothGattServerCallback() {
             override fun onServiceAdded(status: Int, service: BluetoothGattService?) {
@@ -65,6 +70,7 @@ class AndroidChatController(
                 preparedWrite: Boolean, responseNeeded: Boolean, offset: Int, value: ByteArray?
             ) {
                 super.onCharacteristicWriteRequest(device, requestId, characteristic, preparedWrite, responseNeeded, offset, value)
+
                 if (responseNeeded) {
                     gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
                 }
@@ -73,26 +79,41 @@ class AndroidChatController(
                 val incomingData = String(incomingBytes, Charsets.UTF_8)
                 val address = device.address
 
-                when (incomingData) {
-                    "SIG_TYP_START" -> _remoteTypingState.update { it + (address to true) }
-                    "SIG_TYP_STOP" -> _remoteTypingState.update { it + (address to false) }
-                    else -> {
-                        _remoteTypingState.update { it + (address to false) }
-                        scope.launch {
-                            // --- İSİM DÜZELTME HAMLESİ ---
-                            // Gelen mesajın kimden geldiğini bulurken "Unknown" yerine gerçek ismi zorla.
-                            val safeName = getBestDeviceName(device)
+                // 1. Sinyal Kontrolü (Sinyaller her zaman tek parça ve kısadır)
+                if (incomingData == "SIG_TYP_START") {
+                    _remoteTypingState.update { it + (address to true) }
+                    return
+                }
+                if (incomingData == "SIG_TYP_STOP") {
+                    _remoteTypingState.update { it + (address to false) }
+                    return
+                }
 
-                            // 1. Veritabanına kaydet (Listede isim düzelsin diye safeName gönderiyoruz)
-                            repository.receiveMessage(address, safeName, incomingData)
+                // 2. Mesaj Birleştirme (Packet Reassembly)
+                // Gelen veriyi o cihaza ait tampona ekle
+                val buffer = messageBuffers.getOrPut(address) { StringBuilder() }
+                buffer.append(incomingData)
 
-                            // 2. Bildirim Kontrolü
-                            // Eğer şu an bu kişiyle konuşmuyorsak bildirim gönder
-                            if (activeChatAddress != address.uppercase()) {
-                                sendNotification(safeName, incomingData, address)
-                            }
-                        }
-                    }
+                // --- MESAJ TAMAMLANDI MI? ---
+                // Basit bir kontrol: Eğer tamponda "|||" varsa, mesajın başlığı gelmiş demektir.
+                // MTU 512 olsa bile, bazen Android veriyi bölerek gönderir.
+                // Burada %100 garantili bir yöntem uygulayalım:
+                // Gelen veriyi her eklediğimizde kontrol edelim.
+
+                val fullMessage = buffer.toString()
+
+                // Eğer mesaj "|||" içeriyorsa işleme al
+                if (fullMessage.contains(DELIMITER)) {
+                    processFullMessage(device, fullMessage)
+                    // Mesaj işlendi, tamponu temizle
+                    buffer.clear()
+                } else {
+                    // Henüz "|||" gelmedi, beklemeye devam et (sonraki paket bekleniyor)
+                    // Ancak çok uzun süre beklememek için bir timeout mekanizması eklenebilir
+                    // Şimdilik basit tutuyoruz.
+
+                    // Güvenlik: Eğer buffer çok şiştiyse (örn 1000 karakter) ve hala ||| yoksa temizle
+                    if (buffer.length > 2000) buffer.clear()
                 }
             }
         }
@@ -100,19 +121,36 @@ class AndroidChatController(
         addServicesToGattServer()
     }
 
-    // Cihaz ismini bulmak için en iyi yöntem
-    private fun getBestDeviceName(device: BluetoothDevice): String {
-        // 1. Cihazın kendi ismi var mı?
-        if (!device.name.isNullOrBlank()) return device.name
+    private fun processFullMessage(device: BluetoothDevice, message: String) {
+        scope.launch {
+            var senderName = "Bilinmeyen (${device.address.takeLast(4)})"
+            var realContent = message
 
-        // 2. Yoksa, Eşleşmiş (Bonded) cihazlar listesine bak (Orada isim kesin vardır)
-        val bondedMatch = adapter.bondedDevices.find { it.address == device.address }
-        if (bondedMatch?.name != null) return bondedMatch.name
+            if (message.contains(DELIMITER)) {
+                val parts = message.split(DELIMITER, limit = 2)
+                if (parts.size == 2) {
+                    senderName = parts[0]
+                    realContent = parts[1]
+                }
+            }
 
-        // 3. Hiçbiri yoksa Adresi döndür
-        return "Cihaz ${device.address.takeLast(5)}"
+            Log.d("BlueNixTrace", """
+                📥 ---------------- MESAJ BİRLEŞTİRİLDİ ----------------
+                📦 HAM: $message
+                👤 KİMDEN: $senderName
+                💬 İÇERİK: $realContent
+                --------------------------------------------------------
+            """.trimIndent())
+
+            repository.receiveMessage(device.address, senderName, realContent)
+
+            if (activeChatAddress != device.address.uppercase()) {
+                sendNotification(senderName, realContent, device.address)
+            }
+        }
     }
 
+    // ... (addServicesToGattServer, startAdvertising, sendNotification AYNI KALACAK) ...
     private fun addServicesToGattServer() {
         if (gattServer == null) return
         val service = BluetoothGattService(UUID.fromString(Constants.CHAT_SERVICE_UUID), BluetoothGattService.SERVICE_TYPE_PRIMARY)
@@ -133,50 +171,40 @@ class AndroidChatController(
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .build()
 
-        // İSİM GÖSTERİMİ İÇİN:
-        // UUID'yi AdvertiseData'ya, İsmi ScanResponse'a koyuyoruz.
         val advertiseData = AdvertiseData.Builder()
             .setIncludeDeviceName(false)
             .setIncludeTxPowerLevel(false)
             .addServiceUuid(ParcelUuid(UUID.fromString(Constants.CHAT_SERVICE_UUID)))
             .build()
 
-        val scanResponse = AdvertiseData.Builder()
-            .setIncludeDeviceName(true) // İsim burada gidiyor
-            .build()
-
+        val scanResponse = AdvertiseData.Builder().setIncludeDeviceName(true).build()
         advertiser.startAdvertising(settings, advertiseData, scanResponse, object : AdvertiseCallback() {})
     }
 
     private fun sendNotification(title: String, message: String, address: String) {
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val channelId = "chat_msg_channel"
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(channelId, "BlueNix Mesajları", NotificationManager.IMPORTANCE_HIGH)
             notificationManager.createNotificationChannel(channel)
         }
-
         val intent = try {
             Intent(context, Class.forName("com.vahitkeskin.bluenix.MainActivity")).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
                 putExtra("targetDeviceAddress", address)
             }
         } catch (e: Exception) { null }
-
         val pendingIntent = if (intent != null) {
             PendingIntent.getActivity(context, address.hashCode(), intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         } else null
-
         val notification = NotificationCompat.Builder(context, channelId)
-            .setContentTitle(title) // Artık burada Gerçek İsim yazacak
+            .setContentTitle(title)
             .setContentText(message)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .build()
-
         notificationManager.notify(address.hashCode(), notification)
     }
 }

@@ -15,7 +15,7 @@ expect val platformModule: Module
 // 2. ORTAK MODÜL: ViewModel'ler burada tanımlanır.
 val appModule = module {
     // HomeViewModel (LocationService ve BluetoothService istiyor)
-    factory { HomeViewModel(get(), get(), get()) }
+    factory { HomeViewModel(get(), get(), get(), get()) }
 
     // ChatViewModel (ChatController istiyor)
     // "NoDefinitionFoundException" hatası almamak için bunu MUTLAKA ekle
