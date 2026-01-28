@@ -3,6 +3,10 @@ package com.vahitkeskin.bluenix.core.service
 import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.*
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
+import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
@@ -27,7 +31,6 @@ class AndroidChatClient(
 
     private var activeGatt: BluetoothGatt? = null
 
-    // Thread-safe bağlantı durumu
     private val _isConnected = AtomicBoolean(false)
     val isConnected: Boolean get() = _isConnected.get()
 
@@ -38,69 +41,138 @@ class AndroidChatClient(
 
     private var connectionDeferred: CompletableDeferred<Boolean>? = null
     private val DELIMITER = "|||"
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     fun connect(address: String) {
         scope.launch {
-            // İlk deneme
-            val success = connectSuspend(address, isRetry = false)
-            // Eğer başarısız olursa (133 hatası alırsa), önbelleği temizleyip tekrar dene
+            // Önce mevcut bağlantı varsa kopar
+            if (isConnected && activeGatt?.device?.address == address) return@launch
+
+            // --- 1. ADIM: Cihazı Havada Yakala (Scan) ---
+            Log.d("BlueNixClient", "🔍 Bağlantı öncesi cihaz aranıyor: $address")
+            val isDeviceNearby = waitForDeviceDiscovery(address)
+
+            if (!isDeviceNearby) {
+                Log.e("BlueNixClient", "❌ Cihaz taramada bulunamadı! Yine de şansımızı deniyoruz...")
+            } else {
+                Log.i("BlueNixClient", "✅ Cihaz taramada bulundu! Şimdi bağlanılıyor.")
+            }
+
+            // --- 2. ADIM: Bağlan ---
+            val success = connectSuspend(address)
+
             if (!success) {
-                Log.w("BlueNixClient", "🔄 İlk bağlantı başarısız (Zombi bağlantı olabilir). Önbellek temizlenip tekrar deneniyor...")
-                // Biraz nefes aldır
-                delay(1500)
+                Log.w("BlueNixClient", "🔄 İlk bağlantı başarısız. Cache temizleyip tekrar deneniyor...")
+                cleanUp()
+                delay(1000)
                 connectSuspend(address, isRetry = true)
             }
         }
     }
 
-    suspend fun connectSuspend(address: String, isRetry: Boolean = false): Boolean {
-        if (adapter == null || !adapter.isEnabled) return false
-        if (!hasConnectPermission()) return false
+    // --- YENİ EKLENEN FONKSİYON: Cihazı Bulma ---
+    private suspend fun waitForDeviceDiscovery(targetAddress: String): Boolean = suspendCancellableCoroutine { cont ->
+        if (adapter == null || !adapter.isEnabled || !hasConnectPermission()) {
+            cont.resume(false)
+            return@suspendCancellableCoroutine
+        }
 
-        // Zaten bağlıysak işlem yapma
-        if (isConnected && activeGatt?.device?.address == address) return true
+        val scanner = adapter.bluetoothLeScanner
+        if (scanner == null) {
+            cont.resume(false)
+            return@suspendCancellableCoroutine
+        }
+
+        // Sadece hedef MAC adresini arayan filtre
+        val filters = listOf(
+            ScanFilter.Builder().setDeviceAddress(targetAddress).build()
+        )
+
+        // Düşük gecikmeli (hızlı) tarama ayarı
+        val settings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build()
+
+        val scanCallback = object : ScanCallback() {
+            override fun onScanResult(callbackType: Int, result: ScanResult?) {
+                if (result?.device?.address == targetAddress) {
+                    // Cihazı bulduk! Taramayı durdur ve devam et
+                    Log.i("BlueNixClient", "🎯 Hedef cihaz sahada görüldü: $targetAddress")
+                    scanner.stopScan(this)
+                    if (cont.isActive) cont.resume(true)
+                }
+            }
+
+            override fun onScanFailed(errorCode: Int) {
+                Log.e("BlueNixClient", "Scan failed: $errorCode")
+                if (cont.isActive) cont.resume(false)
+            }
+        }
+
+        // Taramayı başlat
+        try {
+            scanner.startScan(filters, settings, scanCallback)
+        } catch (e: Exception) {
+            Log.e("BlueNixClient", "Tarama başlatılamadı: ${e.message}")
+            if (cont.isActive) cont.resume(false)
+            return@suspendCancellableCoroutine
+        }
+
+        // 3 Saniye zaman aşımı koy (Bulamazsa pes etme, connect'e geç)
+        mainHandler.postDelayed({
+            if (cont.isActive) {
+                Log.w("BlueNixClient", "⚠️ Tarama zaman aşımı (Cihaz görünmedi).")
+                try { scanner.stopScan(scanCallback) } catch (e: Exception) {}
+                cont.resume(false)
+            }
+        }, 3000)
+    }
+
+    suspend fun connectSuspend(address: String, isRetry: Boolean = false): Boolean {
+        if (adapter == null || !adapter.isEnabled || !hasConnectPermission()) return false
 
         return connectionMutex.withLock {
             if (isConnected && activeGatt?.device?.address == address) return@withLock true
 
-            Log.w("BlueNixClient", "♻️ Bağlantı Operasyonu Başlatılıyor (${if(isRetry) "Retry" else "İlk"}): $address")
-
-            // 1. ADIM: ZOMBİ BAĞLANTIYI TEMİZLE
+            Log.w("BlueNixClient", "🔌 Bağlantı başlatılıyor ($address)")
             cleanUp()
-
             connectionDeferred = CompletableDeferred()
 
-            withContext(Dispatchers.Main) {
+            mainHandler.post {
                 try {
                     val device = adapter.getRemoteDevice(address)
+                    val appContext = context.applicationContext
 
-                    // --- NÜKLEER ÇÖZÜM: RETRY İSE AUTO-CONNECT KULLAN ---
-                    // autoConnect = true, 133 hatasına karşı daha dirençlidir ama biraz yavaştır.
-                    // İlk denemede false (hızlı), retry'da true (kararlı) deniyoruz.
-                    val autoConnect = isRetry
-
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        activeGatt = device.connectGatt(context, autoConnect, gattCallback, BluetoothDevice.TRANSPORT_LE)
+                    // Android 8.0+ için PHY LE 1M zorlaması (Daha stabil)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        activeGatt = device.connectGatt(
+                            appContext,
+                            false, // autoConnect false daha hızlıdır
+                            gattCallback,
+                            BluetoothDevice.TRANSPORT_LE,
+                            BluetoothDevice.PHY_LE_1M_MASK
+                        )
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        activeGatt = device.connectGatt(
+                            appContext,
+                            false,
+                            gattCallback,
+                            BluetoothDevice.TRANSPORT_LE
+                        )
                     } else {
-                        activeGatt = device.connectGatt(context, autoConnect, gattCallback)
+                        activeGatt = device.connectGatt(appContext, false, gattCallback)
                     }
 
-                    // Eğer bu bir tekrar denemesi ise, gizli API ile önbelleği temizle
-                    if (isRetry) {
-                        refreshDeviceCache(activeGatt)
-                    }
+                    if (isRetry) refreshDeviceCache(activeGatt)
 
                 } catch (e: Exception) {
-                    Log.e("BlueNixClient", "Gatt connect hatası: ${e.message}")
-                    connectionDeferred?.complete(false)
+                    Log.e("BlueNixClient", "Connect hatası: ${e.message}")
+                    try { connectionDeferred?.complete(false) } catch(_:Exception){}
                 }
             }
 
             try {
-                // Bağlantı için 10 saniye bekle
-                withTimeout(10000) {
-                    connectionDeferred?.await() ?: false
-                }
+                withTimeout(10000) { connectionDeferred?.await() ?: false }
             } catch (e: TimeoutCancellationException) {
                 Log.e("BlueNixClient", "❌ Bağlantı zaman aşımı!")
                 cleanUp()
@@ -109,46 +181,33 @@ class AndroidChatClient(
         }
     }
 
-    // --- GİZLİ SİLAH: REFLECTION İLE CACHE TEMİZLEME ---
-    // Android'in "Gatt Cache"ini zorla siler. 133 hatasının ilacıdır.
     private fun refreshDeviceCache(gatt: BluetoothGatt?): Boolean {
         try {
             val localBluetoothGatt = gatt ?: return false
             val localMethod = localBluetoothGatt.javaClass.getMethod("refresh")
-            if (localMethod != null) {
-                val bool = localMethod.invoke(localBluetoothGatt) as Boolean
-                Log.w("BlueNixClient", "🧹 Bluetooth GATT Cache Temizlendi: $bool")
-                return bool
-            }
-        } catch (localException: Exception) {
-            Log.e("BlueNixClient", "Cache temizlenemedi: " + localException.message)
-        }
+            return localMethod.invoke(localBluetoothGatt) as Boolean
+        } catch (localException: Exception) { }
         return false
     }
 
     fun sendRawData(address: String, data: String) {
-        scope.launch {
-            sendRawDataSuspend(address, data)
-        }
+        scope.launch { sendRawDataSuspend(address, data) }
     }
 
     suspend fun sendRawDataSuspend(address: String, data: String): Boolean {
         if (!isConnected || activeGatt == null) {
-            Log.w("BlueNixClient", "⚠️ Bağlantı yok, bağlanılıyor...")
-            val connectedNow = connectSuspend(address)
-            if (!connectedNow) {
-                Log.e("BlueNixClient", "❌ Mesaj gönderilemedi: Bağlantı kurulamadı.")
-                return false
-            }
+            Log.w("BlueNixClient", "⚠️ Bağlantı yok, süreç başlatılıyor...")
+            // Scan ve Connect sürecini başlat
+            connect(address)
+            // Bağlantının kurulması için biraz bekle
+            delay(4000)
+            if (!isConnected) return false
         }
 
         val payload = if (data.startsWith("SIG_")) data else "${adapter.name ?: "Bilinmeyen"}$DELIMITER$data"
 
         return writeMutex.withLock {
             try {
-                if (!isConnected) {
-                    if(!connectSuspend(address)) return@withLock false
-                }
                 internalSendSuspend(payload)
             } catch (e: Exception) {
                 Log.e("BlueNixClient", "Gönderim Hatası: ${e.message}")
@@ -168,8 +227,7 @@ class AndroidChatClient(
         val characteristic = service?.getCharacteristic(UUID.fromString(Constants.CHAT_CHARACTERISTIC_UUID))
 
         if (characteristic == null) {
-            // Servis null ise belki henüz keşfedilmemiştir, 133 yüzünden servisler geç gelebilir
-            Log.e("BlueNixClient", "⚠️ Servis bulunamadı (Cache sorunu olabilir).")
+            Log.e("BlueNixClient", "⚠️ Servis bulunamadı.")
             if (continuation.isActive) continuation.resume(false)
             return@suspendCancellableCoroutine
         }
@@ -185,7 +243,7 @@ class AndroidChatClient(
             }
             val success = gatt.writeCharacteristic(characteristic)
             if (!success) {
-                Log.e("BlueNixClient", "❌ writeCharacteristic başarısız.")
+                Log.e("BlueNixClient", "❌ Yazma başarısız.")
                 writeCallback = null
                 if (continuation.isActive) continuation.resume(false)
             }
@@ -198,12 +256,10 @@ class AndroidChatClient(
         try {
             if (hasConnectPermission()) {
                 activeGatt?.disconnect()
-                // close() çok önemli! Resource sızıntısını bu engeller.
                 activeGatt?.close()
             }
-        } catch (e: Exception) {
-            Log.e("BlueNixClient", "Cleanup hatası: ${e.message}")
-        } finally {
+        } catch (e: Exception) {}
+        finally {
             activeGatt = null
             _isConnected.set(false)
         }
@@ -211,53 +267,48 @@ class AndroidChatClient(
 
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-
-            // Eğer STATUS 133 veya başka bir hata gelirse:
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                Log.e("BlueNixClient", "❌ Bağlantı Hatası (Status: $status). Temizlik yapılıyor.")
-                cleanUp() // Zombiyi öldür
-                connectionDeferred?.complete(false) // Bekleyen fonksiyona "Başarısız" de
+                Log.e("BlueNixClient", "❌ Bağlantı Hatası (Status: $status).")
+                cleanUp()
+                try { connectionDeferred?.complete(false) } catch(_:Exception){}
                 return
             }
 
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                Log.i("BlueNixClient", "✅ GATT Bağlandı. MTU isteniyor...")
-                // Küçük bir gecikme eklemek bazı cihazlarda (Samsung) stabiliteyi artırır
-                Handler(Looper.getMainLooper()).postDelayed({
-                    if (hasConnectPermission()) gatt.requestMtu(517)
-                }, 300)
-
+                Log.i("BlueNixClient", "✅ GATT Bağlandı. Bekleniyor...")
+                mainHandler.postDelayed({
+                    if (hasConnectPermission()) {
+                        try { gatt.requestMtu(517) }
+                        catch (e: Exception) { gatt.discoverServices() }
+                    }
+                }, 600)
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 Log.w("BlueNixClient", "❌ Bağlantı Koptu.")
                 cleanUp()
-                connectionDeferred?.complete(false)
+                try { connectionDeferred?.complete(false) } catch(_:Exception){}
             }
         }
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
-            Log.i("BlueNixClient", "✅ MTU OK ($mtu). Servisler taranıyor...")
+            Log.i("BlueNixClient", "✅ MTU OK. Servisler aranıyor...")
             if (hasConnectPermission()) {
-                // MTU'dan sonra hemen tarama yapma, 300ms bekle (Samsung Fix)
-                Handler(Looper.getMainLooper()).postDelayed({
-                    gatt.discoverServices()
-                }, 300)
+                mainHandler.postDelayed({ gatt.discoverServices() }, 300)
             }
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                Log.i("BlueNixClient", "✅✅ Servisler Bulundu! Sohbet Başlayabilir.")
+                Log.i("BlueNixClient", "✅✅ Servisler Hazır!")
                 _isConnected.set(true)
-                connectionDeferred?.complete(true)
+                try { connectionDeferred?.complete(true) } catch(_:Exception){}
             } else {
                 Log.e("BlueNixClient", "❌ Servis hatası: $status")
                 cleanUp()
-                connectionDeferred?.complete(false)
+                try { connectionDeferred?.complete(false) } catch(_:Exception){}
             }
         }
 
         override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
-            if (status == BluetoothGatt.GATT_SUCCESS) Log.d("BlueNixClient", "✅ Veri iletildi.")
             writeCallback?.invoke()
             writeCallback = null
         }
