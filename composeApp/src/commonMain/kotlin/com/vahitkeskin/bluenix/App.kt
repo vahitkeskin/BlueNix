@@ -134,6 +134,7 @@ fun MainTabsScreen(
                         onNavigateToChatDetail(safeName, safeAddress)
                     }
                 )
+
                 1 -> ChatHistoryScreen(
                     onChatClick = onNavigateToChatDetail
                 )
