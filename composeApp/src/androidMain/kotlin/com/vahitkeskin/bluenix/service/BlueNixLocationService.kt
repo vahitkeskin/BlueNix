@@ -65,7 +65,11 @@ class BlueNixLocationService : Service() {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 // Android 14+ burada izin kontrolü yapar, yoksa Exception fırlatır
-                startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+                startForeground(
+                    1,
+                    notification,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                )
             } else {
                 startForeground(1, notification)
             }

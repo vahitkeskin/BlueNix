@@ -16,7 +16,8 @@ interface ChatDao {
     // --- %100 ÇÖZÜM: GRUPLAMA SORGUSU ---
     // En son mesajı almak için güvenli bir alt sorgu (subquery) kullanıyoruz.
     // 'groups' yerine 'sub' ismini kullandık ki hata vermesin.
-    @Query("""
+    @Query(
+        """
         SELECT 
             m.id, m.deviceAddress, m.deviceName, m.text, m.isFromMe, m.timestamp, m.isRead,
             (SELECT COUNT(*) FROM messages AS u WHERE u.deviceAddress = m.deviceAddress AND u.isRead = 0 AND u.isFromMe = 0) AS unreadCount
@@ -27,7 +28,8 @@ interface ChatDao {
             GROUP BY deviceAddress
         ) as sub ON m.deviceAddress = sub.deviceAddress AND m.timestamp = sub.max_date
         ORDER BY m.timestamp DESC
-    """)
+    """
+    )
     fun getLastConversations(): Flow<List<ConversationTuple>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
