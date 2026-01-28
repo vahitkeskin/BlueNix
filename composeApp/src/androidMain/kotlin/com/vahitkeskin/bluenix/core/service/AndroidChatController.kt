@@ -78,10 +78,23 @@ class AndroidChatController(
             }
 
             override fun onCharacteristicWriteRequest(
-                device: BluetoothDevice, requestId: Int, characteristic: BluetoothGattCharacteristic,
-                preparedWrite: Boolean, responseNeeded: Boolean, offset: Int, value: ByteArray?
+                device: BluetoothDevice,
+                requestId: Int,
+                characteristic: BluetoothGattCharacteristic,
+                preparedWrite: Boolean,
+                responseNeeded: Boolean,
+                offset: Int,
+                value: ByteArray?
             ) {
-                super.onCharacteristicWriteRequest(device, requestId, characteristic, preparedWrite, responseNeeded, offset, value)
+                super.onCharacteristicWriteRequest(
+                    device,
+                    requestId,
+                    characteristic,
+                    preparedWrite,
+                    responseNeeded,
+                    offset,
+                    value
+                )
 
                 // Onay gönder
                 if (responseNeeded) {
