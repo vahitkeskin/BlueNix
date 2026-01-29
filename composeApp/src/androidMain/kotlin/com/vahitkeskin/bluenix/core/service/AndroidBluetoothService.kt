@@ -2,6 +2,7 @@ package com.vahitkeskin.bluenix.core.service
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
@@ -16,7 +17,7 @@ import java.util.Locale
 @SuppressLint("MissingPermission")
 class AndroidBluetoothService(private val context: Context) : BluetoothService {
 
-    private val adapter: BluetoothAdapter? = BluetoothAdapter.getDefaultAdapter()
+    private val adapter: BluetoothAdapter? = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
 
     override fun getPairedDevices(): List<BluetoothDeviceDomain> {
         if (adapter == null || !adapter.isEnabled) return emptyList()
