@@ -11,6 +11,9 @@ import com.vahitkeskin.bluenix.core.service.AndroidLocationService
 import com.vahitkeskin.bluenix.core.service.BluetoothService
 import com.vahitkeskin.bluenix.core.service.ChatController
 import com.vahitkeskin.bluenix.core.service.LocationService
+
+import com.vahitkeskin.bluenix.core.service.FileProcessor
+import com.vahitkeskin.bluenix.core.service.AndroidFileProcessor
 import com.vahitkeskin.bluenix.data.local.AppDatabase
 import com.vahitkeskin.bluenix.data.repository.AndroidChatRepository
 import org.koin.core.module.Module
@@ -20,6 +23,7 @@ import org.koin.dsl.module
 actual val platformModule: Module = module {
     single<LocationService> { AndroidLocationService(get()) }
     single<BluetoothService> { AndroidBluetoothService(get()) }
+    single<FileProcessor> { AndroidFileProcessor(get()) }
 
     single<AppDatabase> {
         val context = get<Context>()

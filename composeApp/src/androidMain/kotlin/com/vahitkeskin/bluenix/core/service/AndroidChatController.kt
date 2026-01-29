@@ -52,6 +52,7 @@ class AndroidChatController(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val DELIMITER = "|||"
     private val messageBuffers = ConcurrentHashMap<String, StringBuilder>()
+    private val receiveManager = ReceiveManager(context)
 
     override fun setActiveChat(address: String?) {
         activeChatAddress = address?.uppercase()
@@ -102,8 +103,34 @@ class AndroidChatController(
                 }
 
                 val incomingBytes = value ?: return
-                val incomingData = String(incomingBytes, Charsets.UTF_8)
                 val address = device.address
+
+                // 1. Dosya Transfer Kontrolü
+                val receiveResult = receiveManager.processPacket(address, incomingBytes)
+                
+                when (receiveResult) {
+                    is ReceiveResult.FileReady -> {
+                        scope.launch {
+                            repository.receiveFile(
+                                address,
+                                receiveResult.fileName,
+                                receiveResult.file.absolutePath,
+                                receiveResult.type.id
+                            )
+                            sendNotification("Dosya Alındı", receiveResult.fileName, address)
+                        }
+                        return // İşlendi, metin olarak algılama
+                    }
+                    is ReceiveResult.Progress -> {
+                        return // Chunk işlendi, devam et
+                    }
+                    is ReceiveResult.None -> {
+                        // Header değil ve aktif transfer yok -> Metin olabilir
+                    }
+                }
+
+                // 2. Metin Mesajı Mantığı (Fallback)
+                val incomingData = String(incomingBytes, Charsets.UTF_8)
 
                 // Sinyal Kontrolü
                 if (incomingData == "SIG_TYP_START") {
@@ -125,7 +152,7 @@ class AndroidChatController(
                     buffer.clear()
                 } else {
                     // Güvenlik: Tampon taşmasını önle
-                    if (buffer.length > 5000) buffer.clear()
+                    if (buffer.length > 50000) buffer.clear() // Limit artırıldı
                 }
             }
         }
