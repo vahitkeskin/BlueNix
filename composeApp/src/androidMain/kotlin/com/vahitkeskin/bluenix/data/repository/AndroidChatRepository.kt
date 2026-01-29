@@ -111,16 +111,5 @@ class AndroidChatRepository(
     }
 
     // ConversationTuple -> Domain çevirici
-    private fun com.vahitkeskin.bluenix.data.local.ConversationTuple.toDomain(): ChatMessage {
-        return ChatMessage(
-            id = id.toString(),
-            text = text,
-            isFromMe = isFromMe,
-            timestamp = timestamp,
-            deviceName = deviceName,
-            deviceAddress = deviceAddress,
-            unreadCount = unreadCount,
-            status = MessageStatus.SENT
-        )
-    }
+
 }
