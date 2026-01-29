@@ -168,8 +168,8 @@ fun BlueNixBottomBar(
                     selectedIconColor = BlueNixBlack,
                     selectedTextColor = NeonBlue,
                     indicatorColor = NeonBlue,
-                    unselectedIconColor = androidx.compose.ui.graphics.Color.Gray,
-                    unselectedTextColor = androidx.compose.ui.graphics.Color.Gray
+                    unselectedIconColor = Color.Gray,
+                    unselectedTextColor = Color.Gray
                 )
             )
         }
