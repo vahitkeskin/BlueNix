@@ -46,4 +46,7 @@ interface ChatDao {
 
     @Query("SELECT COUNT(*) FROM messages WHERE isRead = 0 AND isFromMe = 0")
     fun getUnreadCount(): Flow<Int>
+
+    @Query("SELECT deviceName FROM messages WHERE deviceAddress = :address ORDER BY timestamp DESC LIMIT 1")
+    suspend fun getDeviceName(address: String): String?
 }

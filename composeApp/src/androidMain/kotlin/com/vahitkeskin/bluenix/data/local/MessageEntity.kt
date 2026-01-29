@@ -14,5 +14,6 @@ data class MessageEntity(
     val timestamp: Long,
     val isRead: Boolean = false,
     val messageType: String = "TEXT",
+    val attachmentPath: String? = null,
     val status: MessageStatus = MessageStatus.SENT
 )

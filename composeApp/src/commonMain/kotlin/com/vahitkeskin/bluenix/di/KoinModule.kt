@@ -19,7 +19,7 @@ val appModule = module {
 
     // ChatViewModel (ChatController istiyor)
     // "NoDefinitionFoundException" hatası almamak için bunu MUTLAKA ekle
-    factory { ChatViewModel(get(), get()) }
+    factory { ChatViewModel(get(), get(), get(), get()) }
     factory { ChatHistoryViewModel(get()) }
 }
 

@@ -3,6 +3,8 @@ package com.vahitkeskin.bluenix.core.service
 import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.*
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothStatusCodes
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
@@ -20,12 +22,17 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import com.vahitkeskin.bluenix.core.repository.ChatRepository
+import org.koin.core.component.KoinComponent
+import org.koin.core.component.inject
 import kotlin.coroutines.resume
 
 @SuppressLint("MissingPermission")
 class AndroidChatClient(
     private val context: Context
-) {
+) : KoinComponent { // KoinComponent eklendi
+    private val repository: ChatRepository by inject()
+    private val receiveManager = ReceiveManager(context)
     private val bluetoothManager =
         context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private val adapter = bluetoothManager.adapter
@@ -46,35 +53,39 @@ class AndroidChatClient(
 
     fun connect(address: String) {
         scope.launch {
-            // Önce mevcut bağlantı varsa kopar
-            if (isConnected && activeGatt?.device?.address == address) return@launch
-
-            // --- 1. ADIM: Cihazı Havada Yakala (Scan) ---
-            Log.d("BlueNixClient", "🔍 Bağlantı öncesi cihaz aranıyor: $address")
-            val isDeviceNearby = waitForDeviceDiscovery(address)
-
-            if (!isDeviceNearby) {
-                Log.e(
-                    "BlueNixClient",
-                    "❌ Cihaz taramada bulunamadı! Yine de şansımızı deniyoruz..."
-                )
-            } else {
-                Log.i("BlueNixClient", "✅ Cihaz taramada bulundu! Şimdi bağlanılıyor.")
-            }
-
-            // --- 2. ADIM: Bağlan ---
-            val success = connectSuspend(address)
-
-            if (!success) {
-                Log.w(
-                    "BlueNixClient",
-                    "🔄 İlk bağlantı başarısız. Cache temizleyip tekrar deneniyor..."
-                )
-                cleanUp()
-                delay(1000)
-                connectSuspend(address, isRetry = true)
-            }
+            ensureConnection(address)
         }
+    }
+
+    private suspend fun ensureConnection(address: String): Boolean {
+        // Önce mevcut bağlantı varsa ve doğru cihaza bağlıysa true dön
+        if (isConnected && activeGatt?.device?.address == address) return true
+
+        // --- 1. ADIM: Cihazı Havada Yakala (Scan) ---
+        Log.d("BlueNixClient", "🔍 Bağlantı öncesi cihaz aranıyor: $address")
+        val isDeviceNearby = waitForDeviceDiscovery(address)
+
+        if (!isDeviceNearby) {
+            Log.e(
+                "BlueNixClient",
+                "❌ Cihaz taramada bulunamadı! Yine de şansımızı deniyoruz..."
+            )
+        } else {
+            Log.i("BlueNixClient", "✅ Cihaz taramada bulundu! Şimdi bağlanılıyor.")
+        }
+
+        // --- 2. ADIM: Bağlan ---
+        val success = connectSuspend(address)
+
+        if (success) return true
+
+        Log.w(
+            "BlueNixClient",
+            "🔄 İlk bağlantı başarısız. Cache temizleyip tekrar deneniyor..."
+        )
+        cleanUp()
+        delay(1000)
+        return connectSuspend(address, isRetry = true)
     }
 
     // --- YENİ EKLENEN FONKSİYON: Cihazı Bulma ---
@@ -209,22 +220,16 @@ class AndroidChatClient(
         scope.launch { sendRawDataSuspend(address, data) }
     }
 
-    suspend fun sendRawDataSuspend(address: String, data: String): Boolean {
+    suspend fun sendRawDataSuspend(address: String, data: ByteArray): Boolean {
+        // Bağlantı yoksa veya koptuysa, tekrar bağlanmayı dene
         if (!isConnected || activeGatt == null) {
-            Log.w("BlueNixClient", "⚠️ Bağlantı yok, süreç başlatılıyor...")
-            // Scan ve Connect sürecini başlat
-            connect(address)
-            // Bağlantının kurulması için biraz bekle
-            delay(4000)
-            if (!isConnected) return false
+            val connected = ensureConnection(address)
+            if (!connected) return false
         }
-
-        val payload =
-            if (data.startsWith("SIG_")) data else "${adapter.name ?: "Bilinmeyen"}$DELIMITER$data"
 
         return writeMutex.withLock {
             try {
-                internalSendSuspend(payload)
+                internalSendSuspend(data)
             } catch (e: Exception) {
                 Log.e("BlueNixClient", "Gönderim Hatası: ${e.message}")
                 false
@@ -232,7 +237,13 @@ class AndroidChatClient(
         }
     }
 
-    private suspend fun internalSendSuspend(data: String): Boolean =
+    suspend fun sendRawDataSuspend(address: String, data: String): Boolean {
+        val payload =
+            if (data.startsWith("SIG_")) data else "${adapter.name ?: "Bilinmeyen"}$DELIMITER$data"
+        return sendRawDataSuspend(address, payload.toByteArray())
+    }
+
+    private suspend fun internalSendSuspend(data: ByteArray): Boolean =
         suspendCancellableCoroutine { continuation ->
             val gatt = activeGatt
             if (gatt == null) {
@@ -250,8 +261,29 @@ class AndroidChatClient(
                 return@suspendCancellableCoroutine
             }
 
-            characteristic.setValue(data)
-            characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                try {
+                   if (Build.VERSION.SDK_INT >= 33) {
+                       // Android 13+ için yeni API
+                       val res = gatt.writeCharacteristic(characteristic, data, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+                       if (res != BluetoothStatusCodes.SUCCESS) {
+                           if (continuation.isActive) continuation.resume(false)
+                           return@suspendCancellableCoroutine
+                       }
+                   } else {
+                       // Fallback
+                       characteristic.setValue(data)
+                   }
+                } catch (e: Exception) {
+                     if (continuation.isActive) continuation.resume(false)
+                     return@suspendCancellableCoroutine
+                }
+            } else {
+                characteristic.setValue(data)
+                characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            }
+            
             writeCallback = { if (continuation.isActive) continuation.resume(true) }
 
             try {
@@ -259,11 +291,14 @@ class AndroidChatClient(
                     if (continuation.isActive) continuation.resume(false)
                     return@suspendCancellableCoroutine
                 }
-                val success = gatt.writeCharacteristic(characteristic)
-                if (!success) {
-                    Log.e("BlueNixClient", "❌ Yazma başarısız.")
-                    writeCallback = null
-                    if (continuation.isActive) continuation.resume(false)
+                
+                // Android 13 öncesi için (deprecated API kullanımı zorunlu)
+                if (Build.VERSION.SDK_INT < 33) {
+                    val success = gatt.writeCharacteristic(characteristic)
+                    if (!success) {
+                        writeCallback = null
+                        if (continuation.isActive) continuation.resume(false)
+                    }
                 }
             } catch (e: Exception) {
                 if (continuation.isActive) continuation.resume(false)
@@ -327,6 +362,25 @@ class AndroidChatClient(
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 Log.i("BlueNixClient", "✅✅ Servisler Hazır!")
                 _isConnected.set(true)
+
+                // Bildirimleri Aç (Client dinleme modu)
+                val service = gatt.getService(UUID.fromString(Constants.CHAT_SERVICE_UUID))
+                val characteristic = service?.getCharacteristic(UUID.fromString(Constants.CHAT_CHARACTERISTIC_UUID))
+                if (characteristic != null) {
+                    gatt.setCharacteristicNotification(characteristic, true)
+                    
+                    // CCCD Descriptor yaz
+                    val descriptor = characteristic.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+                    if (descriptor != null) {
+                        if (Build.VERSION.SDK_INT >= 33) {
+                           gatt.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                        } else {
+                           descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                           gatt.writeDescriptor(descriptor)
+                        }
+                    }
+                }
+
                 try {
                     connectionDeferred?.complete(true)
                 } catch (_: Exception) {
@@ -338,6 +392,44 @@ class AndroidChatClient(
                     connectionDeferred?.complete(false)
                 } catch (_: Exception) {
                 }
+            }
+        }
+
+        // --- BİLDİRİM (NOTIFICATION) ALMA ---
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray
+        ) {
+            handleIncomingData(gatt, value)
+        }
+
+        // Deprecated API (Android 12 ve altı için)
+        @Deprecated("Deprecated in Java")
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic
+        ) {
+            handleIncomingData(gatt, characteristic.value)
+        }
+
+        private fun handleIncomingData(gatt: BluetoothGatt, value: ByteArray) {
+            val address = gatt.device.address
+            val result = receiveManager.processPacket(address, value)
+
+            when (result) {
+                is ReceiveResult.FileReady -> {
+                     scope.launch {
+                        repository.receiveFile(address, result.fileName, result.file.absolutePath, result.type.id)
+                        Log.i("BlueNixClient", "Dosya alındı: ${result.fileName}")
+                     }
+                }
+                is ReceiveResult.None -> {
+                    // Normal metin mesajı?
+                    // Client genelde metin almıyor, ama alırsa...
+                     // Log.d("BlueNixClient", "Bilinmeyen veri: ${value.size} bytes")
+                }
+                else -> {}
             }
         }
 
