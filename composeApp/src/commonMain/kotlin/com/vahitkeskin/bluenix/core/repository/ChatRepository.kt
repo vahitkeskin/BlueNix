@@ -25,10 +25,17 @@ interface ChatRepository {
 
     // 6. Mesaj Al (Controller tarafından çağrılır, DB'ye kaydeder)
     suspend fun receiveMessage(address: String, name: String, text: String)
+    suspend fun receiveFile(address: String, fileName: String, fileIdx: String /* temp path */, typeId: Int)
 
     // 7. Sohbeti açınca mesajları okundu işaretle
     suspend fun markAsRead(address: String)
 
     // 8. "Ben Yazıyorum..." sinyalini karşıya gönder
     fun sendTypingSignal(address: String, isTyping: Boolean)
+
+    // 9. Dosya/Resim Gönder
+    suspend fun sendFile(address: String, data: ByteArray, fileName: String, isImage: Boolean)
+
+    // 10. Konum Gönder
+    suspend fun sendLocation(address: String, lat: Double, lng: Double)
 }

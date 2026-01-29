@@ -5,6 +5,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -20,13 +21,26 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.vahitkeskin.bluenix.core.model.ChatMessage
+import com.vahitkeskin.bluenix.core.model.MessageType
+import com.vahitkeskin.bluenix.ui.components.rememberImagePicker
+import com.vahitkeskin.bluenix.ui.components.ChatImage
+import com.vahitkeskin.bluenix.ui.components.rememberFilePicker
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.koin.compose.viewmodel.koinViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -42,10 +56,32 @@ fun ChatScreen(
     val messages by viewModel.getMessages(targetDeviceAddress).collectAsState(initial = emptyList())
 
     // Karşı tarafın "Yazıyor..." bilgisini canlı dinle
-    val isRemoteTyping by viewModel.isRemoteTyping(targetDeviceAddress).collectAsState(initial = false)
+    val isRemoteTyping by viewModel.isRemoteTyping(targetDeviceAddress)
+        .collectAsState(initial = false)
 
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+
+    // --- Görsel Seçici ---
+    val pickImage = rememberImagePicker { uriStr ->
+        if (uriStr != null) {
+            viewModel.sendImage(targetDeviceAddress, uriStr)
+        }
+    }
+
+    // --- Dosya Seçici ---
+    val pickFile = rememberFilePicker { uriStr ->
+        if (uriStr != null) {
+            // Şimdilik sendImage kullanıyoruz ama aslında sendFile olmalı.
+            // ViewModel'e sendFile ekleyeceğiz.
+            // viewModel.sendFile(targetDeviceAddress, uriStr)
+             viewModel.sendImage(targetDeviceAddress, uriStr) // Geçici
+        }
+    }
+
+    // --- Menu State ---
+    var isMenuExpanded by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     // --- 1. BİLDİRİM YÖNETİMİ (KRİTİK) ---
     // Bu ekrana girildiğinde Controller'a "Aktif sohbet bu" bilgisini veriyoruz.
@@ -128,21 +164,81 @@ fun ChatScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // --- MESAJ LİSTESİ ---
-            LazyColumn(
-                state = listState,
+
+            // --- Kapsayıcı Box (Menu Overlay için) ---
+            Box(
                 modifier = Modifier
                     .weight(1f)
-                    .padding(horizontal = 8.dp),
-                reverseLayout = true // Chat standartı: En yeni mesaj altta (LazyColumn'da 0. index)
+                    .fillMaxWidth()
             ) {
-                // Karşı taraf yazıyorsa en alta baloncuk koy (İsteğe bağlı)
-                if (isRemoteTyping) {
-                    item { TypingBubble() }
+                // --- MESAJ LİSTESİ ---
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
+                    reverseLayout = true
+                ) {
+                    // Karşı taraf yazıyorsa en alta baloncuk koy
+                    if (isRemoteTyping) {
+                        item { TypingBubble() }
+                    }
+
+                    items(messages) { msg ->
+                        MessageBubble(msg)
+                    }
                 }
 
-                items(messages) { msg ->
-                    MessageBubble(msg)
+                // --- HIZLI MENÜ (SPEED DIAL) ---
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = isMenuExpanded,
+                    enter = slideInVertically { it } + fadeIn(),
+                    exit = slideOutVertically { it } + fadeOut(),
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(start = 16.dp, bottom = 8.dp)
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        // 1. Galeri
+                        FloatingActionButton(
+                            onClick = {
+                                isMenuExpanded = false
+                                pickImage()
+                            },
+                            containerColor = Color(0xFFE91E63),
+                            contentColor = Color.White,
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(Icons.Default.Image, "Galeri")
+                        }
+
+                        // 2. Dosya
+                        FloatingActionButton(
+                            onClick = {
+                                isMenuExpanded = false
+                                pickFile()
+                            },
+                            containerColor = Color(0xFF9C27B0),
+                            contentColor = Color.White,
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(Icons.Default.Description, "Dosya")
+                        }
+
+                        // 3. Konum
+                        FloatingActionButton(
+                            onClick = {
+                                isMenuExpanded = false
+                                viewModel.sendLocation(targetDeviceAddress)
+                            },
+                            containerColor = Color(0xFF4CAF50),
+                            contentColor = Color.White,
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(Icons.Default.LocationOn, "Konum")
+                        }
+                    }
                 }
             }
 
@@ -154,6 +250,16 @@ fun ChatScreen(
                     .padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // ATAŞ BUTONU (Menu Toggle)
+                IconButton(onClick = { isMenuExpanded = !isMenuExpanded }) {
+                    Icon(
+                        imageVector = if (isMenuExpanded) Icons.Default.Close else Icons.Default.Add,
+                        contentDescription = "Ekle",
+                        tint = Color(0xFF00F2FF),
+                        modifier = Modifier.rotate(if (isMenuExpanded) 90f else 0f) // Opsiyonel animasyon
+                    )
+                }
+
                 TextField(
                     value = inputText,
                     onValueChange = { inputText = it },
@@ -197,6 +303,31 @@ fun ChatScreen(
             }
         }
     }
+
+    // Bottom Sheet Removed
+}
+
+@Composable
+fun AttachmentOption(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    text: String,
+    color: Color,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.padding(8.dp)
+    ) {
+        FilledIconButton(
+            onClick = onClick,
+            colors = IconButtonDefaults.filledIconButtonColors(containerColor = color),
+            modifier = Modifier.size(56.dp)
+        ) {
+            Icon(icon, contentDescription = text, tint = Color.White)
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(text, color = Color.White, fontSize = 14.sp)
+    }
 }
 
 // --- YARDIMCI BİLEŞENLER ---
@@ -225,11 +356,46 @@ fun MessageBubble(message: ChatMessage) {
                 .background(color)
                 .padding(12.dp)
         ) {
-            Text(
-                text = message.text,
-                color = Color.White,
-                fontSize = 16.sp
-            )
+
+            when (message.type) {
+                MessageType.IMAGE -> {
+                    if (message.attachmentPath != null) {
+                        ChatImage(
+                            path = message.attachmentPath,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 200.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                        )
+                    } else {
+                        Text(text = "📷 Fotoğraf (Yüklenemedi)", color = Color.White)
+                    }
+                    // Metin varsa altına ekle
+                    if (message.text.isNotEmpty() && message.text != "📷 Fotoğraf") {
+                         Text(
+                            text = message.text,
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+                MessageType.FILE -> {
+                     Text(
+                        text = "📁 ${message.text}", 
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                else -> {
+                    Text(
+                        text = message.text,
+                        color = Color.White,
+                        fontSize = 16.sp
+                    )
+                }
+            }
 
             // Saat Bilgisi
             Text(

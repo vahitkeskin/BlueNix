@@ -4,13 +4,18 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vahitkeskin.bluenix.core.model.ChatMessage
 import com.vahitkeskin.bluenix.core.repository.ChatRepository
+
 import com.vahitkeskin.bluenix.core.service.ChatController
+import com.vahitkeskin.bluenix.core.service.FileProcessor
+import com.vahitkeskin.bluenix.core.service.LocationService
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 
 class ChatViewModel(
     private val repository: ChatRepository,
-    private val chatController: ChatController
+    private val chatController: ChatController,
+    private val fileProcessor: FileProcessor,
+    private val locationService: LocationService
 ) : ViewModel() {
 
     init {
@@ -49,6 +54,37 @@ class ChatViewModel(
 
             repository.sendMessage(address, name, text)
             repository.sendTypingSignal(address, false)
+        }
+    }
+
+    fun sendImage(address: String, uriStr: String) {
+        viewModelScope.launch {
+            try {
+                // 1. Process Image
+                val bytes = fileProcessor.processImage(uriStr) ?: return@launch
+                
+                // 2. Connect
+                repository.prepareConnection(address)
+                
+                // 3. Send
+                repository.sendFile(address, bytes, "image.jpg", isImage = true)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun sendLocation(address: String) {
+        viewModelScope.launch {
+            try {
+                val location = locationService.getCurrentLocation()
+                if (location != null) {
+                    repository.prepareConnection(address)
+                    repository.sendLocation(address, location.latitude, location.longitude)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
 
